@@ -312,7 +312,7 @@ function renderPermisos(){
   box.innerHTML = b.permisos.map((p, i) => {
     let opts = ""; for (let n = 0; n <= mc + 1; n++) opts += `<option value="${n}" ${p.com === n ? "selected" : ""}>${comNombre(n)}${n === mc + 1 ? " (nueva)" : ""}</option>`;
     return `<div class="card permiso" data-id="${p.id}" data-com="${p.com}">
-      <div class="head"><span class="tag">Permiso ${i+1}</span>
+      <div class="head"><span class="tag">Permiso ${i+1}${p.sita ? ` · <span style="color:var(--amber)">Rectificado por ${esc(p.sita)}</span>` : ""}</span>
         <button class="small ghost danger" data-del="${p.id}" aria-label="Eliminar permiso ${i+1}">Eliminar</button></div>
       <div class="grid">
         <label class="f full"><span>Documento aduanero</span><input data-p="doc" value="${esc(p.doc)}" placeholder="26 052 EC01 009732 P" autocapitalize="characters"></label>
@@ -320,6 +320,7 @@ function renderPermisos(){
         <label class="f"><span>Cantidad (kilos o toneladas)</span><input data-p="tons" value="${esc(p.tons)}" inputmode="decimal" placeholder="20800"></label>
         <label class="f"><span>Inicio de carga estimado</span><input type="datetime-local" data-p="inicio" value="${esc(p.inicio)}" class="${p.inicio ? "" : "falta"}"></label>
         <label class="f"><span>Va en</span><select data-p="com">${opts}</select></label>
+        ${S.buques.length > 1 ? `<label class="f full"><span>Buque</span><select data-p="buque">${S.buques.map(x => `<option value="${x.id}" ${x.id === b.id ? "selected" : ""}>${esc(x.buque || "(sin nombre)")}</option>`).join("")}</select></label>` : ""}
         <div class="full defbox">
           <div class="grid">
             <label class="f"><span>Cumplido (definitiva)</span><select data-p="estado">
@@ -340,6 +341,11 @@ $("#listaPermisos").addEventListener("input", e => {
 $("#listaPermisos").addEventListener("change", e => {
   const el = e.target; const card = el.closest("[data-id]"); if (!card || !el.dataset.p) return;
   const p = B().permisos.find(x => x.id === card.dataset.id); if (!p) return;
+  if (el.dataset.p === "buque") {
+    const dest = S.buques.find(x => x.id === el.value); const orig = B(); if (!dest || dest === orig) return;
+    if (!confirm(`¿Pasar el permiso ${p.doc} a ${dest.buque || "ese buque"}?`)) { el.value = orig.id; return; }
+    moverPermiso(p, orig, dest); save(); renderTodo(); toast(`Permiso pasado a ${dest.buque}`); return;
+  }
   if (el.dataset.p === "estado") { p.estado = el.value; delete p.conforme; save(); renderPermisos(); return; }
   if (el.dataset.p === "com") { p.com = parseInt(el.value, 10); compactarComs(B()); save(); renderPermisos(); }
   else { p[el.dataset.p] = el.value; if (el.dataset.p === "inicio") el.classList.toggle("falta", !el.value); save(); }
@@ -751,7 +757,7 @@ function parsePermiso(items){
   const md = full.match(/\b(\d{2})\s+(\d{3})\s+([A-Z]{2}\d{2})\s+(\d{6})\s+([A-Z])\b/);
   const doc = md ? md.slice(1).join(" ") : "";
   const exportador = below("Importador / Exportador").replace(/\(IVA.*$/i, "").trim();
-  let ata = below("Agente de Transporte Aduanero").replace(/^AGENCIA\s+MARITIMA\s+/i, "").replace(/\s+S\.?\s?A\.?$/i, " S.A").trim();
+  let ata = normAta(below("Agente de Transporte Aduanero"));
   const buque = below("Nombre del Transporte");
   let destino = (full.match(/Pais dest\.:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .]*?)(?=\s*(\*|\d|$|Fecha|SM\b))/) || [])[1] || "";
   if (!destino) destino = below("Pais de Procedencia");
@@ -893,45 +899,108 @@ $("#btnCumplidos").addEventListener("click", () => {
 /* ---------- importar permisos PDF ---------- */
 if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 document.addEventListener("click", e => { if (e.target.closest("[data-importar]")) $("#pdfPermisos").click(); });
+// SITA de rectificación: toma los datos rectificados (buque, ATA, destino) de la declaración
+function parseSita(items){
+  const it = items.filter(i => i.s && i.s.trim());
+  const full = [...it].sort((a, b) => (Math.round(b.y) - Math.round(a.y)) || (a.x - b.x)).map(i => i.s.trim()).join(" ");
+  if (!/S\s*I\s*T\s*A/.test(full) || !/rectificad/i.test(full)) return null;
+  const k = full.search(/Datos rectificados/i); const t = k >= 0 ? full.slice(k) : full;
+  const md = t.match(/DECLARACION:\s*(\d{2})\s*(\d{3})\s*([A-Z]{2}\d{2})\s*(\d{6})\s*([A-Z])/i);
+  if (!md) return null;
+  const g = re => ((t.match(re) || [])[1] || "").trim();
+  const nro = (full.match(/\b\d{5}SITA\d{6}[A-Z]\b/) || [""])[0];
+  const obs = (full.match(/(SE MODIFICA[^]*?)(ESTADO ACTUAL|INGRESADO POR|$)/i) || [])[1] || "";
+  return {
+    sita: true, nro, obs: obs.trim(),
+    doc: md.slice(1).join(" ").toUpperCase(),
+    buque: g(/TRANSPORTE:\s*([^;]+);/i),
+    ata: normAta(g(/CUIT:\s*\d+\s*-\s*([^;]+);/i)),
+    destino: g(/PAIS DE DESTINO:\s*\d+\s*-\s*([A-ZÁÉÍÓÚÑ .]+?)(?=\s*(SE MODIFICA|$|;))/i)
+  };
+}
+function normAta(a){ return (a || "").replace(/^AGENCIA\s+MARITIMA\s+/i, "").replace(/\s+S\.?\s?A\.?$/i, " S.A").trim(); }
 async function leerPDF(file){
   const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   const tc = await (await pdf.getPage(1)).getTextContent();
-  return parsePermiso(tc.items.map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5] })));
+  const items = tc.items.map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5] }));
+  return parseSita(items) || parsePermiso(items);
+}
+const compactDoc = d => (d || "").replace(/\s/g, "").toUpperCase();
+function buqueParaNombre(nombre){
+  let b = nombre ? S.buques.find(x => x.buque === nombre) : null;
+  if (!b) { const a = B(); if (a && !a.buque && !a.permisos.length) b = a; }
+  if (!b) { b = nuevoBuque(); b.auto = true; S.buques.unshift(b); }
+  if (!b.buque) b.buque = nombre;
+  return b;
+}
+function completarBuque(b, d){
+  if (!b.ata && d.ata) b.ata = d.ata;
+  if (!b.exportador && d.exportador) b.exportador = d.exportador;
+  if (!b.destino && d.destino) b.destino = d.destino;
+}
+// mueve un permiso a otro buque; si el buque de origen queda vacío y lo creó la importación, lo borra
+function moverPermiso(p, origen, destino){
+  if (origen === destino) return;
+  origen.permisos = origen.permisos.filter(x => x !== p); compactarComs(origen);
+  p.com = destino.permisos.length ? Math.max(maxCom(destino), p.com > 0 ? 1 : 0) : 0;
+  destino.permisos.push(p);
+  if (!origen.permisos.length && origen.auto) S.buques = S.buques.filter(x => x !== origen);
+}
+function buscarPermiso(doc){
+  for (const b of S.buques) { const p = b.permisos.find(x => compactDoc(x.doc) === compactDoc(doc)); if (p) return { b, p }; }
+  return null;
+}
+function aplicarSita(si){
+  const enc = buscarPermiso(si.doc); if (!enc) return false;
+  const dest = buqueParaNombre(si.buque || enc.b.buque);
+  completarBuque(dest, si);
+  enc.p.sita = si.nro || "SITA";
+  moverPermiso(enc.p, enc.b, dest);
+  return dest;
 }
 $("#pdfPermisos").addEventListener("change", async e => {
   const files = [...e.target.files]; e.target.value = ""; if (!files.length) return;
   if (!window.pdfjsLib) { toast("No se pudo cargar el lector de PDF. Revisá la conexión."); return; }
-  toast("Leyendo permisos…");
-  const resultados = [];
-  for (const f of files) { try { resultados.push({ f, d: await leerPDF(f) }); } catch(err) { resultados.push({ f, err: true }); } }
-  const comPorBuque = {}; let agregados = 0, repetidos = 0, ilegibles = 0; let ultimo = null;
-  for (const r of resultados) {
-    if (r.err || !r.d.doc) { ilegibles++; continue; }
-    const d = r.d;
-    // buscar el buque: por nombre, o el actual si está vacío, o uno nuevo
-    let b = d.buque ? S.buques.find(x => x.buque === d.buque) : null;
-    if (!b) { const a = B(); if (a && !a.buque && !a.permisos.length) b = a; }
-    if (!b) { b = nuevoBuque(); S.buques.unshift(b); }
-    if (!b.buque) b.buque = d.buque;
-    if (!b.ata) b.ata = d.ata;
-    if (!b.exportador) b.exportador = d.exportador;
-    if (!b.destino) b.destino = d.destino;
-    if (d.merc && (!b.permisos.length)) b.mercaderia = d.merc;
-    if (b.permisos.some(p => p.doc.replace(/\s/g, "") === d.doc.replace(/\s/g, ""))) { repetidos++; ultimo = b; continue; }
-    // si el buque ya tenía permisos, los nuevos van en una complementaria nueva (la misma para todo el lote)
+  toast("Leyendo PDFs…");
+  const leidos = [];
+  for (const f of files) { try { leidos.push(await leerPDF(f)); } catch(err) { leidos.push(null); } }
+  S.sitasPend = S.sitasPend || {};
+  const sitas = leidos.filter(d => d && d.sita);
+  const permisos = leidos.filter(d => d && !d.sita && d.doc);
+  const ilegibles = leidos.length - sitas.length - permisos.length;
+  sitas.forEach(si => S.sitasPend[compactDoc(si.doc)] = si);
+  const comPorBuque = {}; let agregados = 0, repetidos = 0, rectificados = 0; let ultimo = null;
+  for (const d0 of permisos) {
+    // si hay un SITA para este permiso, manda lo rectificado
+    const si = S.sitasPend[compactDoc(d0.doc)];
+    const d = si ? Object.assign({}, d0, { buque: si.buque || d0.buque, ata: si.ata || d0.ata, destino: si.destino || d0.destino }) : d0;
+    if (buscarPermiso(d.doc)) { repetidos++; continue; }
+    const b = buqueParaNombre(d.buque);
+    completarBuque(b, d);
+    if (d.merc && !b.permisos.length) b.mercaderia = d.merc;
     if (!(b.id in comPorBuque)) comPorBuque[b.id] = b.permisos.length ? maxCom(b) + 1 : 0;
-    b.permisos.push({ id: uid(), doc: d.doc, merc: d.merc || b.mercaderia, tons: d.tons ? String(d.tons).replace(".", ",") : "", inicio: "", com: comPorBuque[b.id] });
+    b.permisos.push({ id: uid(), doc: d.doc, merc: d.merc || b.mercaderia, tons: d.tons ? String(d.tons).replace(".", ",") : "", inicio: "", com: comPorBuque[b.id], sita: si ? (si.nro || "SITA") : undefined });
+    if (si) { delete S.sitasPend[compactDoc(d.doc)]; rectificados++; }
     agregados++; ultimo = b;
+  }
+  // SITAs de permisos que ya estaban cargados
+  let pendientes = 0;
+  for (const k of Object.keys(S.sitasPend)) {
+    const r = aplicarSita(S.sitasPend[k]);
+    if (r) { delete S.sitasPend[k]; rectificados++; ultimo = r; }
+    else if (sitas.some(si => compactDoc(si.doc) === k)) pendientes++;
   }
   if (ultimo) S.actual = ultimo.id;
   save(); renderTodo();
   if (ultimo) document.querySelector('nav.tabs button[data-tab="permisos"]').click();
   const partes = [];
   if (agregados) partes.push(`${agregados} permiso${agregados > 1 ? "s" : ""} cargado${agregados > 1 ? "s" : ""}`);
+  if (rectificados) partes.push(`${rectificados} rectificado${rectificados > 1 ? "s" : ""} por SITA`);
+  if (pendientes) partes.push(`${pendientes} SITA guardado${pendientes > 1 ? "s" : ""} (se aplica${pendientes > 1 ? "n" : ""} al subir el permiso)`);
   if (repetidos) partes.push(`${repetidos} ya estaba${repetidos > 1 ? "n" : ""}`);
   if (ilegibles) partes.push(`${ilegibles} no se pudo leer`);
   toast(partes.join(", ") || "No se encontraron permisos");
-  if (agregados) setTimeout(() => toast("Completá el inicio de carga estimado"), 2400);
+  if (agregados) setTimeout(() => toast("Completá el inicio de carga estimado"), 3200);
 });
 
 /* ---------- inicio ---------- */
