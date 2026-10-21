@@ -119,6 +119,7 @@ textarea{resize:vertical;font-size:15px}
         <label class="f full"><span>Buque</span><input data-f="buque" placeholder="HONOR DIVA" autocapitalize="characters"></label>
         <label class="f"><span>A.T.A.</span><input data-f="ata" placeholder="NABSA S.A" autocapitalize="characters"></label>
         <label class="f"><span>Registro</span><input data-f="registro" placeholder="Opcional"></label>
+        <label class="f"><span>Arribo anunciado (nota de la previa)</span><input type="date" data-f="arribo"></label>
         <label class="f full"><span>Exportador</span><input data-f="exportador" placeholder="UNION AGRICOLA DE AVELLANEDA C" autocapitalize="characters"></label>
         <label class="f"><span>Unidad</span>
           <select data-f="unidad"><option>VI</option><option>VII</option></select></label>
@@ -173,7 +174,8 @@ textarea{resize:vertical;font-size:15px}
     </div>
     <div class="card" id="notaBox" hidden>
       <h2>Nota a Aduana</h2>
-      <p class="hint">La definitiva va acompañada de la nota con los tickets de balanza y romaneos. Usa la misma fecha y firma.</p>
+      <p class="hint" id="notaHint"></p>
+      <div id="cargaBox"></div>
       <label class="check"><input type="checkbox" id="notaEnPDF"> Agregar la nota al PDF (como primera hoja)</label>
       <div class="actions"><button id="btnNota">Descargar solo la nota</button></div>
     </div>
@@ -399,7 +401,7 @@ function armar(b, sel){
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
   const total = fmtKg(totT);
   const nombre = def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`;
-  return { b, def, titulo, col4, filas, total, nombre, vacia: !lista.length };
+  return { b, def, n, titulo, col4, filas, total, nombre, vacia: !lista.length };
 }
 const HEAD = ["DOCUMENTOS ADUANEROS", "MERCADERIA", "TONS.", null, "FECHA DE INICIO DE CARGA", "FECHA DE FIN DE CARGA"];
 
@@ -409,7 +411,8 @@ function sheetHTML(c, fecha, paraExcel){
   const B_ = s => `<b>${esc(s)}</b>`;
   const tx = paraExcel ? ' style="mso-number-format:\'\\@\'"' : "";
   return `<table>
-    <tr><td colspan="6" style="text-align:center">${B_("ANEXO I")}</td></tr>
+    ${paraExcel ? "" : `<tr><td colspan="2" rowspan="2" style="vertical-align:top"><img src="${LOGO_SP}" alt="Servicios Portuarios S.A." style="width:140px;display:block"></td><td colspan="2" style="text-align:center">${B_("ANEXO I")}</td><td colspan="2"></td></tr><tr><td colspan="4">&nbsp;</td></tr>`}
+    ${paraExcel ? `<tr><td colspan="6" style="text-align:center">${B_("ANEXO I")}</td></tr>` : ""}
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="4" style="font-size:15px">${B_("COMUNICACIÓN DE EMBARQUE")}</td><td colspan="2" style="text-align:center;font-size:15px">${c.titulo.map(B_).join("<br>")}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
@@ -450,9 +453,14 @@ function renderGenerar(){
   const avisoComp = mc === 0 && b.permisos.length ? `<p class="hint" style="margin:10px 0 0">Para armar una complementaria, en la pestaña Permisos poné el permiso nuevo en "Complementaria 1" (o subilo en PDF después de la previa y se asigna solo).</p>` : "";
   $("#avisoComp").innerHTML = avisoComp;
   const esDef = comSel === "def";
-  $("#notaBox").hidden = !esDef; $("#notaPrevWrap").hidden = !esDef;
+  const esPrevia = comSel === "0", conNota = esDef || esPrevia;
+  $("#notaBox").hidden = !conNota; $("#notaPrevWrap").hidden = !conNota;
   $("#notaEnPDF").checked = S.notaEnPDF !== false;
+  $("#notaHint").textContent = esDef ? "La definitiva va acompañada de la nota con los tickets de balanza y romaneos. Usa la misma fecha y firma."
+    : "La previa va acompañada de la nota al Administrador de la Aduana. Usa la misma fecha y firma; el arribo se carga en la pestaña Buque.";
+  if (esPrevia) renderCarga(b); else $("#cargaBox").innerHTML = "";
   if (esDef) $("#notaPrev").innerHTML = notaHTML(b, $("#fechaPres").value);
+  if (esPrevia) $("#notaPrev").innerHTML = notaPreviaHTML(b, $("#fechaPres").value);
   $("#preview").innerHTML = c.vacia ? `<p class="empty" style="color:#666">No hay permisos asignados a esta comunicación.</p>` : sheetHTML(c, $("#fechaPres").value, false);
 }
 $("#chipsCom").addEventListener("click", e => { const v = e.target.dataset?.com; if (v == null) return; comSel = v; renderGenerar(); });
@@ -478,6 +486,7 @@ function construirPDF(c, fecha, d0){
   const txt = (s, x, y, o = {}) => { d.setFont("helvetica", o.bold ? "bold" : "normal"); d.setFontSize(o.size || 10); d.text(String(s ?? ""), x, y, { align: o.align || "left", maxWidth: o.maxWidth }); };
   const par = (lab, val, x, y, maxW) => { d.setFont("helvetica", "bold"); d.setFontSize(10); d.text(lab, x, y); const w = d.getTextWidth(lab + " "); d.setFont("helvetica", "normal"); const v = d.splitTextToSize(String(val || ""), maxW - w); d.text(v[0] || "", x + w, y); };
 
+  try { d.addImage(LOGO_SP, "JPEG", L, 8, 42, 42 * 80 / 269); } catch(e) {}
   txt("ANEXO I", 105, 18, { bold: true, size: 12, align: "center" });
   txt("COMUNICACIÓN DE EMBARQUE", L, 34, { bold: true, size: 14 });
   // recuadro del tipo
@@ -564,24 +573,33 @@ function notaHTML(b, fecha){
     <div style="text-align:right;margin-top:40px">${S.incluirFirma && fi.img ? `<img src="${fi.img}" style="max-height:90px;max-width:160px"><br>` : "<br><br><br>"}${esc(fi.aclaracion)}</div>
   </div>`;
 }
-// párrafo justificado con sangría en la primera línea
-function parrafoJustificado(d, texto, x, y, w, sangria, lh){
-  const palabras = texto.split(/\s+/); const lineas = []; let cur = [];
+// párrafo justificado con sangría en la primera línea; acepta texto o segmentos [{t, b}] (b = negrita)
+function parrafoJustificado(d, texto, x, y, w, sangria, lh, fam = "helvetica"){
+  const segs = typeof texto === "string" ? [{ t: texto }] : texto;
+  const pal = []; segs.forEach(sg => sg.t.split(/(\s+)/).forEach(tok => {
+    if (!tok) return;
+    if (/^\s+$/.test(tok)) { if (pal.length) pal[pal.length - 1].sp = true; return; }
+    // si el segmento empieza pegado a la palabra anterior (sin espacio), se unen
+    if (pal.length && !pal[pal.length - 1].sp && pal[pal.length - 1].seg !== sg) pal[pal.length - 1].partes.push({ t: tok, b: !!sg.b });
+    else pal.push({ partes: [{ t: tok, b: !!sg.b }], sp: false, seg: sg });
+    pal[pal.length - 1].seg = sg;
+  }));
+  const anchoP = p => p.partes.reduce((s, q) => { d.setFont(fam, q.b ? "bold" : "normal"); return s + d.getTextWidth(q.t); }, 0);
+  d.setFont(fam, "normal"); const esp = d.getTextWidth(" ");
   const ancho = i => i === 0 ? w - sangria : w;
-  palabras.forEach(p => {
-    const prueba = [...cur, p].join(" ");
-    if (cur.length && d.getTextWidth(prueba) > ancho(lineas.length)) { lineas.push(cur); cur = [p]; } else cur.push(p);
-  });
+  const lineas = []; let cur = [], wcur = 0;
+  pal.forEach(p => { const wp = anchoP(p);
+    if (cur.length && wcur + esp + wp > ancho(lineas.length)) { lineas.push(cur); cur = [p]; wcur = wp; }
+    else { wcur += (cur.length ? esp : 0) + wp; cur.push(p); } });
   if (cur.length) lineas.push(cur);
+  const dibujar = (p, xx) => { p.partes.forEach(q => { d.setFont(fam, q.b ? "bold" : "normal"); d.text(q.t, xx, y); xx += d.getTextWidth(q.t); }); };
   lineas.forEach((ws, i) => {
-    const x0 = x + (i === 0 ? sangria : 0), disp = ancho(i);
-    if (i === lineas.length - 1 || ws.length === 1) { d.text(ws.join(" "), x0, y); }
-    else {
-      const total = ws.reduce((s, p) => s + d.getTextWidth(p), 0); const gap = (disp - total) / (ws.length - 1);
-      let xx = x0; ws.forEach(p => { d.text(p, xx, y); xx += d.getTextWidth(p) + gap; });
-    }
+    const x0 = x + (i === 0 ? sangria : 0), tot = ws.reduce((s, p) => s + anchoP(p), 0);
+    const gap = (i === lineas.length - 1 || ws.length === 1) ? esp : (ancho(i) - tot) / (ws.length - 1);
+    let xx = x0; ws.forEach(p => { dibujar(p, xx); xx += anchoP(p) + gap; });
     y += lh;
   });
+  d.setFont(fam, "normal");
   return y;
 }
 function construirNota(b, fecha, d0){
@@ -613,15 +631,86 @@ function construirNota(b, fecha, d0){
   d.text(fi.aclaracion || "", R, y, { align: "right" });
   return d;
 }
+
+/* ---------- nota de la previa (al Administrador de la Aduana) ---------- */
+function cargaAuto(b){
+  const m = {}; b.permisos.filter(p => p.com === 0).forEach(p => { const k = (p.merc || "").trim() || "—"; m[k] = (m[k] || 0) + aTn(parseNum(p.tons)); });
+  return Object.entries(m).map(([merc, tn]) => ({ merc, tn: String(Math.round(tn)) }));
+}
+const cargaDe = b => (b.carga && b.carga.length) ? b.carga : cargaAuto(b);
+function renderCarga(b){
+  const c = cargaDe(b);
+  $("#cargaBox").innerHTML = `<p class="hint" style="margin:6px 0">Carga anunciada (sale de los permisos de la previa; podés redondearla):</p>
+    ${c.map((r, i) => `<div class="grid" style="margin-bottom:6px"><label class="f"><span>Toneladas aprox.</span><input data-carga="${i}" data-k="tn" value="${esc(r.tn)}" inputmode="numeric"></label>
+      <label class="f"><span>Mercadería</span><input data-carga="${i}" data-k="merc" value="${esc(r.merc)}" autocapitalize="characters"></label></div>`).join("")}
+    <button class="small" id="btnCargaAuto">Recalcular desde los permisos</button>`;
+}
+$("#cargaBox").addEventListener("input", e => {
+  const el = e.target; if (!el.dataset.carga) return; const b = B();
+  b.carga = cargaDe(b).map(r => ({ ...r }));
+  b.carga[+el.dataset.carga][el.dataset.k] = el.dataset.k === "merc" ? el.value.toUpperCase() : el.value;
+  save(); $("#notaPrev").innerHTML = notaPreviaHTML(b, $("#fechaPres").value);
+});
+$("#cargaBox").addEventListener("click", e => { if (e.target.id !== "btnCargaAuto") return; const b = B(); b.carga = null; save(); renderGenerar(); });
+function fechaLargaPrevia(iso){ if (!iso) return ""; const [y, m, d] = iso.split("-").map(Number); return `Rosario, ${d} de ${MESES[m - 1]} ${y}`; }
+function fechaCorta(iso){ if (!iso) return "__/__/__"; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y.slice(2)}`; }
+// texto del segundo párrafo como segmentos (b = negrita)
+function segsPrevia(b){
+  const c = cargaDe(b); const segs = [{ t: `En consideración a que el día ${fechaCorta(b.arribo)} está anunciado la llegada del buque ` }, { t: `“${nombreMV(b)}”`, b: true }, { t: " para cargar aproximadamente " }];
+  c.forEach((r, i) => {
+    if (i) segs.push({ t: i === c.length - 1 ? " y " : ", " });
+    segs.push({ t: `${parseNum(r.tn).toLocaleString("es-AR")} Tn`, b: true }, { t: " de " }, { t: r.merc, b: true });
+  });
+  segs.push({ t: " para las firmas exportadoras " }, { t: b.exportadorAbrev || b.exportador, b: true },
+    { t: " por lo que nos es grato dirigirnos al Sr. Administrador solicitándole tenga a bien autorizar, con carácter provisorio exclusivamente, esta operación de embarque a realizarse por nuestra Terminal." });
+  return segs;
+}
+const P1_PREVIA = "Esta Sociedad inició ante este organismo con expediente Nro. EA-52-94-4446 las gestiones para lograr la habilitación de las Unidades VI y VII de Puerto Rosario, que nos fueran adjudicadas por resolución nro. 1292/94 del Ministerio de Economía y que ya venían operando hasta la fecha reciente bajo la titularidad de la ex-Junta Nacional de Granos.";
+const P3_PREVIA = "Sin otro particular, hacemos propicia la oportunidad para saludar a Ud. muy atte.-";
+function notaPreviaHTML(b, fecha){
+  const fi = F(); const par = t => `<p style="text-indent:150px;text-align:justify;margin:0">${t}</p>`;
+  return `<div style="font-family:'Times New Roman',Times,serif;font-size:14px;line-height:1.4;max-width:560px;margin:0 auto">
+    <img src="${LOGO_SP}" alt="Servicios Portuarios S.A." style="width:200px;display:block">
+    <p style="text-align:right;margin-top:24px">${esc(fechaLargaPrevia(fecha))}</p>
+    <p style="margin-top:24px;margin-bottom:0">Sr.</p><p style="margin:0">Administrador de la Aduana de Rosario</p>
+    <p>S._____________ / ______________D.</p>
+    <p style="margin-top:28px">De nuestra mayor consideración:</p>
+    ${par(esc(P1_PREVIA))}${par(segsPrevia(b).map(sg => sg.b ? `<b>${esc(sg.t)}</b>` : esc(sg.t)).join(""))}${par(esc(P3_PREVIA))}
+    <div style="text-align:center;margin:30px 0 0 200px">${S.incluirFirma && fi.img ? `<img src="${fi.img}" style="max-height:90px;max-width:160px">` : ""}</div>
+  </div>`;
+}
+function construirNotaPrevia(b, fecha, d0){
+  const { jsPDF } = window.jspdf;
+  const d = d0 || new jsPDF({ unit: "mm", format: "a4" });
+  const L = 22, R = 188, W = R - L;
+  try { d.addImage(LOGO_SP, "JPEG", L, 14, 62, 62 * 80 / 269); } catch(e) {}
+  d.setFont("times", "normal"); d.setFontSize(12);
+  d.text(fechaLargaPrevia(fecha), R, 46, { align: "right" });
+  d.text("Sr.", L, 62); d.text("Administrador de la Aduana de Rosario", L, 67.5);
+  d.text("S._____________ / ______________D.", L, 77);
+  d.text("De nuestra mayor consideración:", L, 96);
+  let y = 108;
+  y = parrafoJustificado(d, P1_PREVIA, L, y, W, 52, 5.4, "times");
+  y = parrafoJustificado(d, segsPrevia(b), L, y, W, 52, 5.4, "times");
+  y = parrafoJustificado(d, P3_PREVIA, L, y, W, 52, 5.4, "times");
+  const fi = F(); y += 14;
+  if (S.incluirFirma && fi.img) {
+    const maxW = 45, maxH = 32; let w = maxW, h = maxW * (fi.h / fi.w || 0.6);
+    if (h > maxH) { h = maxH; w = maxH * (fi.w / fi.h || 1.6); }
+    try { d.addImage(fi.img, "PNG", 135 - w / 2, y, w, h); } catch(e) {}
+  }
+  return d;
+}
 function pdfCompleto(c, fecha){
   if (c.def && S.notaEnPDF !== false) { const d = construirNota(c.b, fecha); d.addPage(); return construirPDF(c, fecha, d); }
+  if (!c.def && c.n === 0 && S.notaEnPDF !== false) { const d = construirNotaPrevia(c.b, fecha); d.addPage(); return construirPDF(c, fecha, d); }
   return construirPDF(c, fecha);
 }
 $("#notaEnPDF").addEventListener("change", e => { S.notaEnPDF = e.target.checked; save(); });
 $("#btnNota").addEventListener("click", () => {
   const b = B(); if (!b) return;
   if (!window.jspdf) { toast("No se pudo cargar el generador de PDF. Revisá la conexión."); return; }
-  construirNota(b, $("#fechaPres").value).save(`Nota Aduana - ${b.buque || "BUQUE"}.pdf`.replace(/[\/\\:*?"<>|]/g, ""));
+  (comSel === "def" ? construirNota(b, $("#fechaPres").value) : construirNotaPrevia(b, $("#fechaPres").value)).save(`Nota Aduana ${comSel === "def" ? "definitiva" : "previa"} - ${b.buque || "BUQUE"}.pdf`.replace(/[\/\\:*?"<>|]/g, ""));
 });
 
 $("#btnPDF").addEventListener("click", () => {
