@@ -993,7 +993,10 @@ function parseSita(items){
   const it = items.filter(i => i.s && i.s.trim());
   const full = [...it].sort((a, b) => (Math.round(b.y) - Math.round(a.y)) || (a.x - b.x)).map(i => i.s.trim()).join(" ");
   if (!/S\s*I\s*T\s*A/.test(full) || !/rectificad/i.test(full)) return null;
-  const k = full.search(/Datos rectificados/i); const t = k >= 0 ? full.slice(k) : full;
+  // solo el recuadro "Datos rectificados por el usuario" (las líneas que están justo debajo del título)
+  const lab = it.find(i => /Datos rectificados/i.test(i.s));
+  const t = lab ? [...it].filter(i => i.y <= lab.y + 1 && i.y > lab.y - 60)
+      .sort((a, b) => (Math.round(b.y) - Math.round(a.y)) || (a.x - b.x)).map(i => i.s.trim()).join(" ") + ";" : full;
   const md = t.match(/DECLARACION:\s*(\d{2})\s*(\d{3})\s*([A-Z]{2}\d{2})\s*(\d{6})\s*([A-Z])/i);
   if (!md) return null;
   const g = re => ((t.match(re) || [])[1] || "").trim();
@@ -1002,8 +1005,8 @@ function parseSita(items){
   return {
     sita: true, nro, obs: obs.trim(),
     doc: md.slice(1).join(" ").toUpperCase(),
-    buque: g(/TRANSPORTE:\s*([^;]+);/i),
-    ata: normAta(g(/CUIT:\s*\d+\s*-\s*([^;]+);/i)),
+    buque: g(/TRANSPORTE:\s*([^;]+?)\s*;/i),
+    ata: normAta(g(/CUIT:\s*\d+\s*-\s*([^;]+?)\s*;/i)),
     destino: g(/PAIS DE DESTINO:\s*\d+\s*-\s*([A-ZÁÉÍÓÚÑ .]+?)(?=\s*(SE MODIFICA|$|;))/i)
   };
 }
@@ -1043,6 +1046,9 @@ function aplicarSita(si){
   const enc = buscarPermiso(si.doc); if (!enc) return false;
   const dest = buqueParaNombre(si.buque || enc.b.buque);
   completarBuque(dest, si);
+  // lo que el SITA no cambia (ATA, destino, exportador…) se toma del buque donde estaba el permiso
+  completarBuque(dest, enc.b);
+  if (!dest.exportadorAbrev && enc.b.exportadorAbrev) dest.exportadorAbrev = enc.b.exportadorAbrev;
   enc.p.sita = si.nro || "SITA";
   moverPermiso(enc.p, enc.b, dest);
   return dest;
