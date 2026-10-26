@@ -133,10 +133,11 @@ textarea{resize:vertical;font-size:15px}
     <div class="card">
       <h2>Fin de carga</h2>
       <p class="hint">Se usa solo en la definitiva. Lo que cargó cada permiso (del mail de cumplidos) se completa en la pestaña Permisos.</p>
-      <div class="grid">
+      <div class="grid" id="fechasUnicas">
         <label class="f"><span>Inicio de carga real</span><input type="datetime-local" data-f="inicioReal"></label>
         <label class="f"><span>Fin de carga real</span><input type="datetime-local" data-f="finReal"></label>
       </div>
+      <div id="fechasMerc"></div>
     </div>
     <button class="ghost danger" id="btnBorrarBuque">Eliminar este buque</button>
   </section>
@@ -261,6 +262,7 @@ document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("cl
   document.querySelectorAll("nav.tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
   document.querySelectorAll("section.panel").forEach(p => p.classList.toggle("on", p.id === "p-" + tabActual));
   if (tabActual === "generar") renderGenerar();
+  if (tabActual === "buque" && B()) renderFechasMerc(B());
   if (tabActual === "firma") sizePad();
 }));
 
@@ -291,7 +293,31 @@ $("#btnBorrarBuque").addEventListener("click", () => {
 function renderBuque(){
   const b = B(); if (!b) return;
   document.querySelectorAll("#p-buque [data-f]").forEach(el => { el.value = b[el.dataset.f] ?? ""; });
+  renderFechasMerc(b);
 }
+/* ---------- fechas reales por mercadería (cuando el buque carga más de un cereal) ---------- */
+const mercsDe = b => [...new Set(b.permisos.map(p => (p.merc || "").trim().toUpperCase()).filter(Boolean))];
+function fechasDe(b, merc){
+  const m = mercsDe(b);
+  if (m.length <= 1) return { inicio: b.inicioReal, fin: b.finReal };
+  const f = (b.fechasMerc || {})[(merc || "").trim().toUpperCase()] || {};
+  return { inicio: f.inicio || "", fin: f.fin || "" };
+}
+function renderFechasMerc(b){
+  const m = mercsDe(b), varias = m.length > 1;
+  $("#fechasUnicas").style.display = varias ? "none" : "";
+  $("#fechasMerc").innerHTML = varias ? `<p class="hint">Este buque carga ${m.length} mercaderías: cargá inicio y fin de cada una.</p>` + m.map(k => {
+    const f = (b.fechasMerc || {})[k] || {};
+    return `<div style="margin-bottom:10px"><b>${esc(k)}</b><div class="grid" style="margin-top:6px">
+      <label class="f"><span>Inicio de carga real</span><input type="datetime-local" data-fm="${esc(k)}" data-k="inicio" value="${esc(f.inicio || "")}"></label>
+      <label class="f"><span>Fin de carga real</span><input type="datetime-local" data-fm="${esc(k)}" data-k="fin" value="${esc(f.fin || "")}"></label></div></div>`;
+  }).join("") : "";
+}
+$("#fechasMerc").addEventListener("change", e => {
+  const el = e.target; if (!el.dataset.fm) return; const b = B();
+  b.fechasMerc = b.fechasMerc || {}; b.fechasMerc[el.dataset.fm] = b.fechasMerc[el.dataset.fm] || {};
+  b.fechasMerc[el.dataset.fm][el.dataset.k] = el.value; save();
+});
 document.querySelectorAll("#p-buque [data-f]").forEach(el => {
   const ev = el.tagName === "SELECT" || el.type === "datetime-local" ? "change" : "input";
   el.addEventListener(ev, () => {
@@ -387,15 +413,19 @@ function armar(b, sel){
   const def = sel === "def";
   const n = def ? null : parseInt(sel, 10);
   // la complementaria incluye los permisos de la previa y de las complementarias anteriores
-  const lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
+  let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
+  if (def) { const orden = mercsDe(b); const k = p => orden.indexOf((p.merc || "").trim().toUpperCase());
+    lista = lista.map((p, i) => ({ p, i })).sort((a, c) => (k(a.p) - k(c.p)) || (a.i - c.i)).map(x => x.p); }
   const titulo = def ? ["DEFINITIVA"] : n === 0 ? ["PREVIA"] : ["PREVIA", "COMPLEMENTARIA"];
   const col4 = def ? "APLICACIÓN" : "DESTINO";
   const aplicDe = estadoDe;
-  let aplicAnt = null;
+  let aplicAnt = null, iniAnt = null, finAnt = null;
   const filas = lista.map((p, i) => {
     const t = tnDef(p, def);
     if (def) { const a = aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
-      return [p.doc, p.merc, fmtKg(t), celda, i === 0 ? fmtDT(b.inicioReal) : '"', i === 0 ? fmtDT(b.finReal) : '"']; }
+      const fe = fechasDe(b, p.merc), ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
+      const cIni = i > 0 && ini === iniAnt ? '"' : ini, cFin = i > 0 && fin === finAnt ? '"' : fin; iniAnt = ini; finAnt = fin;
+      return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
     return [p.doc, p.merc, fmtKg(t), b.destino, fmtDT(p.inicio), ""];
   });
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
@@ -473,7 +503,7 @@ function nombreArchivo(c, ext){ return `Com Emb. ${c.nombre} - ${c.b.buque || "B
 function validar(c){
   if (c.vacia) { toast("Esta comunicación no tiene permisos"); return false; }
   if (c.def && c.b.permisos.some(p => estadoDe(p) === "CON DIFERENCIA" && !String(p.tonsEmb || "").trim())) { if (!confirm("Hay permisos con diferencia sin las toneladas cargadas. ¿Generar igual?")) return false; }
-  if (c.def && (!c.b.inicioReal || !c.b.finReal)) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
+  if (c.def && (mercsDe(c.b).length > 1 ? mercsDe(c.b) : [""]).some(m => { const f = fechasDe(c.b, m); return !f.inicio || !f.fin; })) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
   return true;
 }
 
