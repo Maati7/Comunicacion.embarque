@@ -120,7 +120,7 @@ textarea{resize:vertical;font-size:15px}
         <label class="f"><span>A.T.A.</span><input data-f="ata" placeholder="NABSA S.A" autocapitalize="characters"></label>
         <label class="f"><span>Registro</span><input data-f="registro" placeholder="Opcional"></label>
         <label class="f"><span>Arribo anunciado (nota de la previa)</span><input type="date" data-f="arribo"></label>
-        <label class="f full"><span>Exportador</span><input data-f="exportador" placeholder="UNION AGRICOLA DE AVELLANEDA C" autocapitalize="characters"></label>
+        <label class="f full"><span>Exportador (principal)</span><input data-f="exportador" placeholder="UNION AGRICOLA DE AVELLANEDA C" autocapitalize="characters"></label>
         <label class="f"><span>Unidad</span>
           <select data-f="unidad"><option>VI</option><option>VII</option></select></label>
         <label class="f"><span>Destino</span><input data-f="destino" placeholder="CHINA" autocapitalize="characters"></label>
@@ -139,6 +139,7 @@ textarea{resize:vertical;font-size:15px}
       </div>
       <div id="fechasMerc"></div>
     </div>
+    <div id="expBox"></div>
     <button class="ghost danger" id="btnBorrarBuque">Eliminar este buque</button>
   </section>
 
@@ -168,6 +169,7 @@ textarea{resize:vertical;font-size:15px}
     <div class="card">
       <h2>Qué comunicación</h2>
       <div class="chips" id="chipsCom"></div>
+      <div class="chips" id="chipsExp"></div>
       <div id="avisoComp"></div>
       <label class="f" style="max-width:240px"><span>Fecha de presentación</span><input type="date" id="fechaPres"></label>
       <label class="f" style="max-width:320px;margin-top:12px"><span>Firma</span><select id="firmante"></select></label>
@@ -262,7 +264,7 @@ document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("cl
   document.querySelectorAll("nav.tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
   document.querySelectorAll("section.panel").forEach(p => p.classList.toggle("on", p.id === "p-" + tabActual));
   if (tabActual === "generar") renderGenerar();
-  if (tabActual === "buque" && B()) renderFechasMerc(B());
+  if (tabActual === "buque" && B()) { renderFechasMerc(B()); renderExportadores(B()); }
   if (tabActual === "firma") sizePad();
 }));
 
@@ -293,22 +295,53 @@ $("#btnBorrarBuque").addEventListener("click", () => {
 function renderBuque(){
   const b = B(); if (!b) return;
   document.querySelectorAll("#p-buque [data-f]").forEach(el => { el.value = b[el.dataset.f] ?? ""; });
-  renderFechasMerc(b);
+  renderFechasMerc(b); renderExportadores(b);
 }
-/* ---------- fechas reales por mercadería (cuando el buque carga más de un cereal) ---------- */
+/* ---------- exportadores (un buque puede tener varios) ---------- */
+// p.exp vacío = exportador principal del buque (b.exportador); si no, el nombre tal cual vino en el permiso
+const expKey = p => p.exp || "_";
+function expKeys(b){ const k = [...new Set(b.permisos.map(expKey))]; return k.length ? k : ["_"]; }
+const multiExp = b => expKeys(b).length > 1;
+function expNombre(b, k){ return k === "_" ? (b.exportador || "") : (((b.expInfo || {})[k] || {}).nombre || k); }
+function expAbrev(b, k){ return k === "_" ? (b.exportadorAbrev || b.exportador || "") : (((b.expInfo || {})[k] || {}).abrev || expNombre(b, k)); }
+// clave de exportador para un nombre leído de un PDF
+function claveExp(b, nombre){
+  if (!nombre) return undefined;
+  if (!b.exportador) { b.exportador = nombre; b.expOrig = nombre; return undefined; }
+  if (nombre === b.exportador || nombre === b.expOrig) return undefined;
+  return nombre;
+}
+const listaY = a => a.length <= 1 ? (a[0] || "") : a.slice(0, -1).join(", ") + " y " + a[a.length - 1];
+function renderExportadores(b){
+  const otros = expKeys(b).filter(k => k !== "_");
+  $("#expBox").innerHTML = otros.length ? `<div class="card"><h2>Otros exportadores del buque</h2>
+    <p class="hint">El principal es el de arriba. Para cada uno: cómo figura en la planilla y la abreviatura (va en la unificada y en las notas).</p>
+    ${otros.map(k => { const inf = (b.expInfo || {})[k] || {}; return `<div class="grid" style="margin-bottom:8px">
+      <label class="f"><span>Exportador</span><input data-exp="${esc(k)}" data-k="nombre" value="${esc(inf.nombre ?? k)}" autocapitalize="characters"></label>
+      <label class="f"><span>Abreviado</span><input data-exp="${esc(k)}" data-k="abrev" value="${esc(inf.abrev || "")}" placeholder="Ej: COFCO INT" autocapitalize="characters"></label></div>`; }).join("")}</div>` : "";
+}
+$("#expBox").addEventListener("input", e => {
+  const el = e.target; if (!el.dataset.exp) return; const b = B();
+  b.expInfo = b.expInfo || {}; b.expInfo[el.dataset.exp] = b.expInfo[el.dataset.exp] || {};
+  b.expInfo[el.dataset.exp][el.dataset.k] = el.value.toUpperCase(); save();
+});
+
+/* ---------- fechas reales por grupo (mercadería, y exportador si hay varios) ---------- */
 const mercsDe = b => [...new Set(b.permisos.map(p => (p.merc || "").trim().toUpperCase()).filter(Boolean))];
-function fechasDe(b, merc){
-  const m = mercsDe(b);
-  if (m.length <= 1) return { inicio: b.inicioReal, fin: b.finReal };
-  const f = (b.fechasMerc || {})[(merc || "").trim().toUpperCase()] || {};
+const grupoDe = (b, p) => (multiExp(b) ? expKey(p) + "||" : "") + (p.merc || "").trim().toUpperCase();
+function gruposFecha(b){ const g = []; b.permisos.forEach(p => { const k = grupoDe(b, p); if (!g.includes(k)) g.push(k); }); return g; }
+function etiquetaGrupo(b, k){ const i = k.indexOf("||"); return i >= 0 ? `${expAbrev(b, k.slice(0, i))} · ${k.slice(i + 2) || "—"}` : (k || "—"); }
+function fechasDe(b, p){
+  if (gruposFecha(b).length <= 1) return { inicio: b.inicioReal, fin: b.finReal };
+  const f = (b.fechasMerc || {})[grupoDe(b, p)] || {};
   return { inicio: f.inicio || "", fin: f.fin || "" };
 }
 function renderFechasMerc(b){
-  const m = mercsDe(b), varias = m.length > 1;
+  const m = gruposFecha(b), varias = m.length > 1;
   $("#fechasUnicas").style.display = varias ? "none" : "";
-  $("#fechasMerc").innerHTML = varias ? `<p class="hint">Este buque carga ${m.length} mercaderías: cargá inicio y fin de cada una.</p>` + m.map(k => {
+  $("#fechasMerc").innerHTML = varias ? `<p class="hint">Este buque tiene ${m.length} grupos de carga (por mercadería${multiExp(b) ? " y exportador" : ""}): cargá inicio y fin de cada uno.</p>` + m.map(k => {
     const f = (b.fechasMerc || {})[k] || {};
-    return `<div style="margin-bottom:10px"><b>${esc(k)}</b><div class="grid" style="margin-top:6px">
+    return `<div style="margin-bottom:10px"><b>${esc(etiquetaGrupo(b, k))}</b><div class="grid" style="margin-top:6px">
       <label class="f"><span>Inicio de carga real</span><input type="datetime-local" data-fm="${esc(k)}" data-k="inicio" value="${esc(f.inicio || "")}"></label>
       <label class="f"><span>Fin de carga real</span><input type="datetime-local" data-fm="${esc(k)}" data-k="fin" value="${esc(f.fin || "")}"></label></div></div>`;
   }).join("") : "";
@@ -344,6 +377,7 @@ function renderPermisos(){
         <button class="small ghost danger" data-del="${p.id}" aria-label="Eliminar permiso ${i+1}">Eliminar</button></div>
       <div class="grid">
         <label class="f full"><span>Documento aduanero</span><input data-p="doc" value="${esc(p.doc)}" placeholder="26 052 EC01 009732 P" autocapitalize="characters"></label>
+        <label class="f full"><span>Exportador</span><select data-p="exp">${expKeys(b).map(k => `<option value="${esc(k)}" ${expKey(p) === k ? "selected" : ""}>${esc(expNombre(b, k) || "(principal, sin cargar)")}</option>`).join("")}<option value="__nuevo">+ Otro exportador…</option></select></label>
         <label class="f"><span>Mercadería</span><input data-p="merc" value="${esc(p.merc)}" autocapitalize="characters"></label>
         <label class="f"><span>Cantidad (kilos o toneladas)</span><input data-p="tons" value="${esc(p.tons)}" inputmode="decimal" placeholder="20800"></label>
         <label class="f"><span>Inicio de carga estimado</span><input type="datetime-local" data-p="inicio" value="${esc(p.inicio)}" class="${p.inicio ? "" : "falta"}"></label>
@@ -369,6 +403,11 @@ $("#listaPermisos").addEventListener("input", e => {
 $("#listaPermisos").addEventListener("change", e => {
   const el = e.target; const card = el.closest("[data-id]"); if (!card || !el.dataset.p) return;
   const p = B().permisos.find(x => x.id === card.dataset.id); if (!p) return;
+  if (el.dataset.p === "exp") {
+    if (el.value === "__nuevo") { const nm = (prompt("Nombre del exportador (como figura en el permiso):") || "").trim().toUpperCase(); if (!nm) { renderPermisos(); return; } p.exp = claveExp(B(), nm); }
+    else if (el.value === "_") delete p.exp; else p.exp = el.value;
+    save(); renderPermisos(); return;
+  }
   if (el.dataset.p === "buque") {
     const dest = S.buques.find(x => x.id === el.value); const orig = B(); if (!dest || dest === orig) return;
     if (!confirm(`¿Pasar el permiso ${p.doc} a ${dest.buque || "ese buque"}?`)) { el.value = orig.id; return; }
@@ -399,7 +438,7 @@ $("#btnAddPermiso").addEventListener("click", () => {
 });
 
 /* ---------- armado de la comunicación ---------- */
-let comSel = "0";
+let comSel = "0", exSel = "all";
 // en la definitiva, si el permiso tuvo diferencia y se cargaron las toneladas embarcadas, se usan esas
 const estadoDe = p => p.estado || (p.conforme === false ? "CON DIFERENCIA" : "CONFORME");
 const tnDef = (p, def) => {
@@ -409,29 +448,33 @@ const tnDef = (p, def) => {
   if (e === "CON DIFERENCIA" && String(p.tonsEmb || "").trim() !== "") return aTn(parseNum(p.tonsEmb));
   return aTn(parseNum(p.tons));
 };
-function armar(b, sel){
+function armar(b, sel, ex = "all"){
   const def = sel === "def";
+  if (!multiExp(b)) ex = "all";
+  const gral = multiExp(b) && ex === "all";
   const n = def ? null : parseInt(sel, 10);
   // la complementaria incluye los permisos de la previa y de las complementarias anteriores
-  let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
-  if (def) { const orden = mercsDe(b); const k = p => orden.indexOf((p.merc || "").trim().toUpperCase());
+  let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).filter(p => ex === "all" || expKey(p) === ex).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
+  if (def) { const orden = gruposFecha(b); const k = p => orden.indexOf(grupoDe(b, p));
     lista = lista.map((p, i) => ({ p, i })).sort((a, c) => (k(a.p) - k(c.p)) || (a.i - c.i)).map(x => x.p); }
-  const titulo = def ? ["DEFINITIVA"] : n === 0 ? ["PREVIA"] : ["PREVIA", "COMPLEMENTARIA"];
-  const col4 = def ? "APLICACIÓN" : "DESTINO";
+  const titulo = (def ? ["DEFINITIVA"] : n === 0 ? ["PREVIA"] : ["PREVIA", "COMPLEMENTARIA"]).concat(gral ? ["GRAL"] : []);
+  const col4 = def ? "APLICACIÓN" : gral ? "EXPORTADOR" : "DESTINO";
+  const exps = ex === "all" ? expKeys(b) : [ex];
   const aplicDe = estadoDe;
   let aplicAnt = null, iniAnt = null, finAnt = null;
   const filas = lista.map((p, i) => {
     const t = tnDef(p, def);
     if (def) { const a = aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
-      const fe = fechasDe(b, p.merc), ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
+      const fe = fechasDe(b, p), ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
       const cIni = i > 0 && ini === iniAnt ? '"' : ini, cFin = i > 0 && fin === finAnt ? '"' : fin; iniAnt = ini; finAnt = fin;
       return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
-    return [p.doc, p.merc, fmtKg(t), b.destino, fmtDT(p.inicio), ""];
+    return [p.doc, p.merc, fmtKg(t), gral ? expAbrev(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
   });
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
   const total = fmtKg(totT);
-  const nombre = def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`;
-  return { b, def, n, titulo, col4, filas, total, nombre, vacia: !lista.length };
+  const nombre = (def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`) + (gral ? " GRAL" : ex !== "all" ? " " + expAbrev(b, ex) : "");
+  return { b, def, n, ex, gral, titulo, col4, filas, total, nombre, vacia: !lista.length,
+    exportadores: exps.map(k => expNombre(b, k)), abrevs: exps.map(k => expAbrev(b, k)) };
 }
 const HEAD = ["DOCUMENTOS ADUANEROS", "MERCADERIA", "TONS.", null, "FECHA DE INICIO DE CARGA", "FECHA DE FIN DE CARGA"];
 
@@ -448,7 +491,7 @@ function sheetHTML(c, fecha, paraExcel){
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="2">${B_("A.T.A.:")} ${esc(b.ata)}</td><td colspan="2">${B_("REGISTRO:")} ${esc(b.registro) || "……………………………"}</td><td colspan="2">${B_("PLANILLA Nº:")} ${esc(b.planilla)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
-    <tr><td colspan="3">${B_("EXPORTADORES:")} ${esc(b.exportador)}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
+    <tr><td colspan="3" style="vertical-align:top">${B_("EXPORTADORES:")} ${c.exportadores.map(esc).join("<br>")}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="3">${B_("BUQUE:")} ${esc(b.buque)}</td><td>${B_("Unidad:")} ${esc(b.unidad)}</td><td colspan="2">${B_("Destino:")} ${esc(b.destino)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
@@ -479,7 +522,10 @@ function renderGenerar(){
   if (!$("#fechaPres").value) $("#fechaPres").value = hoyISO();
   $("#incluirFirma").checked = !!S.incluirFirma;
   $("#firmante").innerHTML = todasFirmas().length ? todasFirmas().map(f => `<option value="${f.id}" ${f.id === F().id ? "selected" : ""}>${esc(f.aclaracion || "(sin aclaración)")}</option>`).join("") : `<option value="">Cargá una firma en la pestaña Firma</option>`;
-  const c = armar(b, comSel);
+  if (!multiExp(b) || (exSel !== "all" && !expKeys(b).includes(exSel))) exSel = "all";
+  $("#chipsExp").innerHTML = multiExp(b) ? [["all", "Unificada (todos)"], ...expKeys(b).map(k => [k, expAbrev(b, k)])]
+    .map(([v, t]) => `<button aria-pressed="${v === exSel}" data-ex="${esc(v)}">${esc(t)}</button>`).join("") : "";
+  const c = armar(b, comSel, exSel);
   const avisoComp = mc === 0 && b.permisos.length ? `<p class="hint" style="margin:10px 0 0">Para armar una complementaria, en la pestaña Permisos poné el permiso nuevo en "Complementaria 1" (o subilo en PDF después de la previa y se asigna solo).</p>` : "";
   $("#avisoComp").innerHTML = avisoComp;
   const esDef = comSel === "def";
@@ -493,6 +539,7 @@ function renderGenerar(){
   if (esPrevia) $("#notaPrev").innerHTML = notaPreviaHTML(b, $("#fechaPres").value);
   $("#preview").innerHTML = c.vacia ? `<p class="empty" style="color:#666">No hay permisos asignados a esta comunicación.</p>` : sheetHTML(c, $("#fechaPres").value, false);
 }
+$("#chipsExp").addEventListener("click", e => { const v = e.target.dataset?.ex; if (v == null) return; exSel = v; renderGenerar(); });
 $("#chipsCom").addEventListener("click", e => { const v = e.target.dataset?.com; if (v == null) return; comSel = v; renderGenerar(); });
 $("#fechaPres").addEventListener("change", renderGenerar);
 $("#incluirFirma").addEventListener("change", e => { S.incluirFirma = e.target.checked; save(); renderGenerar(); });
@@ -503,7 +550,7 @@ function nombreArchivo(c, ext){ return `Com Emb. ${c.nombre} - ${c.b.buque || "B
 function validar(c){
   if (c.vacia) { toast("Esta comunicación no tiene permisos"); return false; }
   if (c.def && c.b.permisos.some(p => estadoDe(p) === "CON DIFERENCIA" && !String(p.tonsEmb || "").trim())) { if (!confirm("Hay permisos con diferencia sin las toneladas cargadas. ¿Generar igual?")) return false; }
-  if (c.def && (mercsDe(c.b).length > 1 ? mercsDe(c.b) : [""]).some(m => { const f = fechasDe(c.b, m); return !f.inicio || !f.fin; })) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
+  if (c.def && c.b.permisos.some(p => { const f = fechasDe(c.b, p); return !f.inicio || !f.fin; })) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
   return true;
 }
 
@@ -520,7 +567,7 @@ function construirPDF(c, fecha, d0){
   txt("ANEXO I", 105, 18, { bold: true, size: 12, align: "center" });
   txt("COMUNICACIÓN DE EMBARQUE", L, 34, { bold: true, size: 14 });
   // recuadro del tipo
-  const tw = 58, tx = R - tw, th = c.titulo.length > 1 ? 16 : 11;
+  const tw = 58, tx = R - tw, th = 5 + 6 * c.titulo.length;
   d.setLineWidth(0.5); d.rect(tx, 27, tw, th);
   c.titulo.forEach((t, i) => txt(t, tx + tw / 2, 34 + i * 6, { bold: true, size: 12, align: "center" }));
 
@@ -529,9 +576,11 @@ function construirPDF(c, fecha, d0){
   par("REGISTRO:", b.registro || "………………………", 85, y, 65);
   par("PLANILLA Nº:", b.planilla, 152, y, 43);
   y += 10;
-  par("EXPORTADORES:", b.exportador, L, y, 105);
+  par("EXPORTADORES:", c.exportadores[0], L, y, 105);
   txt("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII", R, y, { bold: true, size: 9.5, align: "right" });
-  y += 10;
+  d.setFont("helvetica", "bold"); d.setFontSize(10); const wEx = d.getTextWidth("EXPORTADORES: ");
+  c.exportadores.slice(1).forEach((nm, i) => txt(nm, L + wEx, y + 5 * (i + 1), { size: 10 }));
+  y += 10 + 5 * (c.exportadores.length - 1);
   par("BUQUE:", b.buque, L, y, 95);
   par("Unidad:", b.unidad, 112, y, 30);
   par("Destino:", b.destino, 145, y, 50);
@@ -587,7 +636,7 @@ const nombreMV = b => { const n = (b.buque || "").trim(); return /^(MV|M\/V)\s/i
 function textosNota(b){
   return [
     `Adjuntamos tickets de inicio en cero de las ${b.balanzas || "3"} balanzas de embarque de la Unidad ${b.unidad}, como así también los tickets finales de carga.`,
-    `Se adjuntan además romaneos de embarque correspondiente al exportador ${b.exportadorAbrev || b.exportador}, por cereal, fecha y turno.`,
+    (() => { const a = abrevsNota(b); return `Se adjuntan además romaneos de embarque correspondiente${a.length > 1 ? " a los exportadores" : " al exportador"} ${listaY(a)}, por cereal, fecha y turno.`; })(),
     `Sin otro particular, hacemos propicia la oportunidad para saludar a Uds. muy atte.`
   ];
 }
@@ -663,11 +712,14 @@ function construirNota(b, fecha, d0){
 }
 
 /* ---------- nota de la previa (al Administrador de la Aduana) ---------- */
+// exportadores de la comunicación que se está generando (todos o el elegido)
+const abrevsNota = b => (exSel === "all" || !multiExp(b) ? expKeys(b) : [exSel]).map(k => expAbrev(b, k));
+const claveCarga = () => exSel === "all" ? "carga" : "carga_" + exSel;
 function cargaAuto(b){
-  const m = {}; b.permisos.filter(p => p.com === 0).forEach(p => { const k = (p.merc || "").trim() || "—"; m[k] = (m[k] || 0) + aTn(parseNum(p.tons)); });
+  const m = {}; b.permisos.filter(p => p.com === 0 && (exSel === "all" || !multiExp(b) || expKey(p) === exSel)).forEach(p => { const k = (p.merc || "").trim() || "—"; m[k] = (m[k] || 0) + aTn(parseNum(p.tons)); });
   return Object.entries(m).map(([merc, tn]) => ({ merc, tn: String(Math.round(tn)) }));
 }
-const cargaDe = b => (b.carga && b.carga.length) ? b.carga : cargaAuto(b);
+const cargaDe = b => { const c = b[claveCarga()]; return (c && c.length) ? c : cargaAuto(b); };
 function renderCarga(b){
   const c = cargaDe(b);
   $("#cargaBox").innerHTML = `<p class="hint" style="margin:6px 0">Carga anunciada (sale de los permisos de la previa; podés redondearla):</p>
@@ -677,11 +729,11 @@ function renderCarga(b){
 }
 $("#cargaBox").addEventListener("input", e => {
   const el = e.target; if (!el.dataset.carga) return; const b = B();
-  b.carga = cargaDe(b).map(r => ({ ...r }));
-  b.carga[+el.dataset.carga][el.dataset.k] = el.dataset.k === "merc" ? el.value.toUpperCase() : el.value;
+  const k = claveCarga(); b[k] = cargaDe(b).map(r => ({ ...r }));
+  b[k][+el.dataset.carga][el.dataset.k] = el.dataset.k === "merc" ? el.value.toUpperCase() : el.value;
   save(); $("#notaPrev").innerHTML = notaPreviaHTML(b, $("#fechaPres").value);
 });
-$("#cargaBox").addEventListener("click", e => { if (e.target.id !== "btnCargaAuto") return; const b = B(); b.carga = null; save(); renderGenerar(); });
+$("#cargaBox").addEventListener("click", e => { if (e.target.id !== "btnCargaAuto") return; const b = B(); b[claveCarga()] = null; save(); renderGenerar(); });
 function fechaLargaPrevia(iso){ if (!iso) return ""; const [y, m, d] = iso.split("-").map(Number); return `Rosario, ${d} de ${MESES[m - 1]} ${y}`; }
 function fechaCorta(iso){ if (!iso) return "__/__/__"; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y.slice(2)}`; }
 // texto del segundo párrafo como segmentos (b = negrita)
@@ -691,7 +743,9 @@ function segsPrevia(b){
     if (i) segs.push({ t: i === c.length - 1 ? " y " : ", " });
     segs.push({ t: `${parseNum(r.tn).toLocaleString("es-AR")} Tn`, b: true }, { t: " de " }, { t: r.merc, b: true });
   });
-  segs.push({ t: " para las firmas exportadoras " }, { t: b.exportadorAbrev || b.exportador, b: true },
+  segs.push({ t: " para las firmas exportadoras " });
+  abrevsNota(b).forEach((a, i, arr) => { if (i) segs.push({ t: i === arr.length - 1 ? " y " : ", " }); segs.push({ t: a, b: true }); });
+  segs.push(
     { t: " por lo que nos es grato dirigirnos al Sr. Administrador solicitándole tenga a bien autorizar, con carácter provisorio exclusivamente, esta operación de embarque a realizarse por nuestra Terminal." });
   return segs;
 }
@@ -744,14 +798,14 @@ $("#btnNota").addEventListener("click", () => {
 });
 
 $("#btnPDF").addEventListener("click", () => {
-  const b = B(); if (!b) return; const c = armar(b, comSel); if (!validar(c)) return;
+  const b = B(); if (!b) return; const c = armar(b, comSel, exSel); if (!validar(c)) return;
   if (!window.jspdf) { toast("No se pudo cargar el generador de PDF. Revisá la conexión."); return; }
   pdfCompleto(c, $("#fechaPres").value).save(nombreArchivo(c, "pdf"));
 });
 const puedeCompartir = () => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([""], "a.pdf", { type: "application/pdf" })] })); } catch(e) { return false; } };
 if (puedeCompartir()) $("#btnShare").hidden = false;
 $("#btnShare").addEventListener("click", async () => {
-  const b = B(); if (!b) return; const c = armar(b, comSel); if (!validar(c)) return;
+  const b = B(); if (!b) return; const c = armar(b, comSel, exSel); if (!validar(c)) return;
   if (!window.jspdf) { toast("No se pudo cargar el generador de PDF. Revisá la conexión."); return; }
   const blob = pdfCompleto(c, $("#fechaPres").value).output("blob");
   const file = new File([blob], nombreArchivo(c, "pdf"), { type: "application/pdf" });
@@ -760,7 +814,7 @@ $("#btnShare").addEventListener("click", async () => {
 
 /* ---------- Excel ---------- */
 $("#btnXLS").addEventListener("click", () => {
-  const b = B(); if (!b) return; const c = armar(b, comSel); if (!validar(c)) return;
+  const b = B(); if (!b) return; const c = armar(b, comSel, exSel); if (!validar(c)) return;
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8">
   <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Hoja1</x:Name><x:WorksheetOptions><x:Print><x:ValidPrinterInfo/></x:Print></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
   <style>td{font-family:Arial;font-size:10pt}</style></head><body>${sheetHTML(c, $("#fechaPres").value, true)}</body></html>`;
@@ -1057,12 +1111,17 @@ function buqueParaNombre(nombre){
 }
 function completarBuque(b, d){
   if (!b.ata && d.ata) b.ata = d.ata;
-  if (!b.exportador && d.exportador) b.exportador = d.exportador;
+  if (!b.exportador && d.exportador) { b.exportador = d.exportador; b.expOrig = d.expOrig || d.exportador; }
   if (!b.destino && d.destino) b.destino = d.destino;
 }
 // mueve un permiso a otro buque; si el buque de origen queda vacío y lo creó la importación, lo borra
 function moverPermiso(p, origen, destino){
   if (origen === destino) return;
+  const nom = p.exp || origen.expOrig || origen.exportador;
+  const abO = p.exp ? ((origen.expInfo || {})[p.exp] || {}).abrev : origen.exportadorAbrev;
+  const k = claveExp(destino, nom);
+  if (k) { p.exp = k; if (abO) { destino.expInfo = destino.expInfo || {}; destino.expInfo[k] = destino.expInfo[k] || { abrev: abO }; } }
+  else { delete p.exp; if (abO && !destino.exportadorAbrev) destino.exportadorAbrev = abO; }
   origen.permisos = origen.permisos.filter(x => x !== p); compactarComs(origen);
   p.com = destino.permisos.length ? Math.max(maxCom(destino), p.com > 0 ? 1 : 0) : 0;
   destino.permisos.push(p);
@@ -1104,7 +1163,7 @@ $("#pdfPermisos").addEventListener("change", async e => {
     completarBuque(b, d);
     if (d.merc && !b.permisos.length) b.mercaderia = d.merc;
     if (!(b.id in comPorBuque)) comPorBuque[b.id] = b.permisos.length ? maxCom(b) + 1 : 0;
-    b.permisos.push({ id: uid(), doc: d.doc, merc: d.merc || b.mercaderia, tons: d.tons ? String(d.tons).replace(".", ",") : "", inicio: "", com: comPorBuque[b.id], sita: si ? (si.nro || "SITA") : undefined });
+    b.permisos.push({ id: uid(), doc: d.doc, merc: d.merc || b.mercaderia, tons: d.tons ? String(d.tons).replace(".", ",") : "", inicio: "", com: comPorBuque[b.id], exp: claveExp(b, d.exportador), sita: si ? (si.nro || "SITA") : undefined });
     if (si) { delete S.sitasPend[compactDoc(d.doc)]; rectificados++; }
     agregados++; ultimo = b;
   }
