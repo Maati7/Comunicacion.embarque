@@ -174,6 +174,7 @@ textarea{resize:vertical;font-size:15px}
       <label class="f" style="max-width:240px"><span>Fecha de presentación</span><input type="date" id="fechaPres"></label>
       <label class="f" style="max-width:320px;margin-top:12px"><span>Firma</span><select id="firmante"></select></label>
       <label class="check" style="margin-top:12px"><input type="checkbox" id="incluirFirma"> Incluir firma en el PDF</label>
+      <label class="check" style="margin-top:8px"><input type="checkbox" id="expCompleto"> Nombre completo del exportador (no abreviado) en las notas y la unificada</label>
     </div>
     <div class="card" id="notaBox" hidden>
       <h2>Nota a Aduana</h2>
@@ -303,6 +304,7 @@ const expKey = p => p.exp || "_";
 function expKeys(b){ const k = [...new Set(b.permisos.map(expKey))]; return k.length ? k : ["_"]; }
 const multiExp = b => expKeys(b).length > 1;
 function expNombre(b, k){ return k === "_" ? (b.exportador || "") : (((b.expInfo || {})[k] || {}).nombre || k); }
+const expEtiq = (b, k) => S.expCompleto ? expNombre(b, k) : expAbrev(b, k);
 function expAbrev(b, k){ return k === "_" ? (b.exportadorAbrev || b.exportador || "") : (((b.expInfo || {})[k] || {}).abrev || expNombre(b, k)); }
 // clave de exportador para un nombre leído de un PDF
 function claveExp(b, nombre){
@@ -374,7 +376,10 @@ function renderPermisos(){
     let opts = ""; for (let n = 0; n <= mc + 1; n++) opts += `<option value="${n}" ${p.com === n ? "selected" : ""}>${comNombre(n)}${n === mc + 1 ? " (nueva)" : ""}</option>`;
     return `<div class="card permiso" data-id="${p.id}" data-com="${p.com}">
       <div class="head"><span class="tag">Permiso ${i+1}${p.sita ? ` · <span style="color:var(--amber)">Rectificado por ${esc(p.sita)}</span>` : ""}</span>
-        <button class="small ghost danger" data-del="${p.id}" aria-label="Eliminar permiso ${i+1}">Eliminar</button></div>
+        <span style="display:flex;gap:4px">
+          <button class="small" data-mov="-1" ${i === 0 ? "disabled" : ""} aria-label="Subir permiso ${i+1}">▲</button>
+          <button class="small" data-mov="1" ${i === b.permisos.length - 1 ? "disabled" : ""} aria-label="Bajar permiso ${i+1}">▼</button>
+          <button class="small ghost danger" data-del="${p.id}" aria-label="Eliminar permiso ${i+1}">Eliminar</button></span></div>
       <div class="grid">
         <label class="f full"><span>Documento aduanero</span><input data-p="doc" value="${esc(p.doc)}" placeholder="26 052 EC01 009732 P" autocapitalize="characters"></label>
         <label class="f full"><span>Exportador</span><select data-p="exp">${expKeys(b).map(k => `<option value="${esc(k)}" ${expKey(p) === k ? "selected" : ""}>${esc(expNombre(b, k) || "(principal, sin cargar)")}</option>`).join("")}<option value="__nuevo">+ Otro exportador…</option></select></label>
@@ -387,6 +392,7 @@ function renderPermisos(){
           <div class="grid">
             <label class="f"><span>Cumplido (definitiva)</span><select data-p="estado">
               ${["CONFORME", "CON DIFERENCIA", "NO EMBARCO"].map(o => `<option ${estadoDe(p) === o ? "selected" : ""}>${o}</option>`).join("")}</select></label>
+            ${estadoDe(p) === "NO EMBARCO" ? `<label class="check" style="align-self:end;min-height:44px"><input type="checkbox" data-p="sinHora" ${p.sinHora ? "checked" : ""}> Sin horarios en la definitiva</label>` : ""}
             ${estadoDe(p) === "CON DIFERENCIA" ? `<label class="f"><span>Cargado (kilos o toneladas)</span><input data-p="tonsEmb" value="${esc(p.tonsEmb || "")}" inputmode="decimal" placeholder="Permiso: ${esc(p.tons)}" class="${String(p.tonsEmb || "").trim() ? "" : "falta"}"></label>` : ""}
           </div>
         </div>
@@ -413,11 +419,17 @@ $("#listaPermisos").addEventListener("change", e => {
     if (!confirm(`¿Pasar el permiso ${p.doc} a ${dest.buque || "ese buque"}?`)) { el.value = orig.id; return; }
     moverPermiso(p, orig, dest); save(); renderTodo(); toast(`Permiso pasado a ${dest.buque}`); return;
   }
-  if (el.dataset.p === "estado") { p.estado = el.value; delete p.conforme; save(); renderPermisos(); return; }
+  if (el.dataset.p === "sinHora") { p.sinHora = el.checked; save(); return; }
+  if (el.dataset.p === "estado") { p.estado = el.value; delete p.conforme; p.sinHora = el.value === "NO EMBARCO"; save(); renderPermisos(); return; }
   if (el.dataset.p === "com") { p.com = parseInt(el.value, 10); compactarComs(B()); save(); renderPermisos(); }
   else { p[el.dataset.p] = el.value; if (el.dataset.p === "inicio") el.classList.toggle("falta", !el.value); save(); }
 });
 $("#listaPermisos").addEventListener("click", e => {
+  const mv = e.target.closest("[data-mov]");
+  if (mv) { const b = B(); const id0 = mv.closest("[data-id]").dataset.id; const i = b.permisos.findIndex(p => p.id === id0), j = i + parseInt(mv.dataset.mov, 10);
+    if (i < 0 || j < 0 || j >= b.permisos.length) return;
+    [b.permisos[i], b.permisos[j]] = [b.permisos[j], b.permisos[i]]; save(); renderPermisos();
+    const c = document.querySelector(`#listaPermisos [data-id="${id0}"] [data-mov="${mv.dataset.mov}"]`); (c && !c.disabled ? c : document.querySelector(`#listaPermisos [data-id="${id0}"]`))?.focus?.(); return; }
   const id = e.target.dataset?.del; if (!id) return;
   if (!confirm("¿Eliminar este permiso?")) return;
   const b = B(); b.permisos = b.permisos.filter(p => p.id !== id); compactarComs(b); save(); renderPermisos();
@@ -455,8 +467,7 @@ function armar(b, sel, ex = "all"){
   const n = def ? null : parseInt(sel, 10);
   // la complementaria incluye los permisos de la previa y de las complementarias anteriores
   let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).filter(p => ex === "all" || expKey(p) === ex).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
-  if (def) { const orden = gruposFecha(b); const k = p => orden.indexOf(grupoDe(b, p));
-    lista = lista.map((p, i) => ({ p, i })).sort((a, c) => (k(a.p) - k(c.p)) || (a.i - c.i)).map(x => x.p); }
+  // en la definitiva salen en el orden que tienen en la pestaña Permisos
   const titulo = (def ? ["DEFINITIVA"] : n === 0 ? ["PREVIA"] : ["PREVIA", "COMPLEMENTARIA"]).concat(gral ? ["GRAL"] : []);
   const col4 = def ? "APLICACIÓN" : gral ? "EXPORTADOR" : "DESTINO";
   const exps = ex === "all" ? expKeys(b) : [ex];
@@ -465,10 +476,11 @@ function armar(b, sel, ex = "all"){
   const filas = lista.map((p, i) => {
     const t = tnDef(p, def);
     if (def) { const a = aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
+      if (estadoDe(p) === "NO EMBARCO" && p.sinHora) { iniAnt = finAnt = null; return [p.doc, p.merc, fmtKg(t), celda, "", ""]; }
       const fe = fechasDe(b, p), ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
       const cIni = i > 0 && ini === iniAnt ? '"' : ini, cFin = i > 0 && fin === finAnt ? '"' : fin; iniAnt = ini; finAnt = fin;
       return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
-    return [p.doc, p.merc, fmtKg(t), gral ? expAbrev(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
+    return [p.doc, p.merc, fmtKg(t), gral ? expEtiq(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
   });
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
   const total = fmtKg(totT);
@@ -521,6 +533,7 @@ function renderGenerar(){
   $("#chipsCom").innerHTML = opciones.map(([v, t]) => `<button aria-pressed="${v === comSel}" data-com="${v}">${t}</button>`).join("");
   if (!$("#fechaPres").value) $("#fechaPres").value = hoyISO();
   $("#incluirFirma").checked = !!S.incluirFirma;
+  $("#expCompleto").checked = !!S.expCompleto;
   $("#firmante").innerHTML = todasFirmas().length ? todasFirmas().map(f => `<option value="${f.id}" ${f.id === F().id ? "selected" : ""}>${esc(f.aclaracion || "(sin aclaración)")}</option>`).join("") : `<option value="">Cargá una firma en la pestaña Firma</option>`;
   if (!multiExp(b) || (exSel !== "all" && !expKeys(b).includes(exSel))) exSel = "all";
   $("#chipsExp").innerHTML = multiExp(b) ? [["all", "Unificada (todos)"], ...expKeys(b).map(k => [k, expAbrev(b, k)])]
@@ -542,6 +555,7 @@ function renderGenerar(){
 $("#chipsExp").addEventListener("click", e => { const v = e.target.dataset?.ex; if (v == null) return; exSel = v; renderGenerar(); });
 $("#chipsCom").addEventListener("click", e => { const v = e.target.dataset?.com; if (v == null) return; comSel = v; renderGenerar(); });
 $("#fechaPres").addEventListener("change", renderGenerar);
+$("#expCompleto").addEventListener("change", e => { S.expCompleto = e.target.checked; save(); renderGenerar(); });
 $("#incluirFirma").addEventListener("change", e => { S.incluirFirma = e.target.checked; save(); renderGenerar(); });
 $("#firmante").addEventListener("change", e => { if (e.target.value) { S.firmaSel = e.target.value; save(); renderGenerar(); renderFirma(); } });
 
@@ -576,11 +590,13 @@ function construirPDF(c, fecha, d0){
   par("REGISTRO:", b.registro || "………………………", 85, y, 65);
   par("PLANILLA Nº:", b.planilla, 152, y, 43);
   y += 10;
-  par("EXPORTADORES:", c.exportadores[0], L, y, 105);
+  txt("EXPORTADORES:", L, y, { bold: true });
   txt("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII", R, y, { bold: true, size: 9.5, align: "right" });
   d.setFont("helvetica", "bold"); d.setFontSize(10); const wEx = d.getTextWidth("EXPORTADORES: ");
-  c.exportadores.slice(1).forEach((nm, i) => txt(nm, L + wEx, y + 5 * (i + 1), { size: 10 }));
-  y += 10 + 5 * (c.exportadores.length - 1);
+  d.setFont("helvetica", "normal");
+  const lnEx = c.exportadores.flatMap(nm => d.splitTextToSize(String(nm || ""), 105 - wEx));
+  lnEx.forEach((ln, i) => txt(ln, L + wEx, y + 5 * i, { size: 10 }));
+  y += 10 + 5 * Math.max(0, lnEx.length - 1);
   par("BUQUE:", b.buque, L, y, 95);
   par("Unidad:", b.unidad, 112, y, 30);
   par("Destino:", b.destino, 145, y, 50);
@@ -592,6 +608,9 @@ function construirPDF(c, fecha, d0){
   d.setLineWidth(0.3);
   const fila = (vals, h, opts = {}) => {
     let x = L;
+    d.setFont("helvetica", opts.bold ? "bold" : "normal"); d.setFontSize(opts.size || 9);
+    vals.forEach((v, i) => { const w = opts.spans && opts.spans[i] !== undefined ? opts.spans[i] : cols[i]; if (!w) return;
+      h = Math.max(h, d.splitTextToSize(String(v ?? ""), w - 2).length * (opts.size || 9) * 0.42 + 3); });
     vals.forEach((v, i) => {
       const w = opts.spans && opts.spans[i] !== undefined ? opts.spans[i] : cols[i]; if (w === 0) return;
       d.rect(x, y, w, h);
@@ -713,7 +732,7 @@ function construirNota(b, fecha, d0){
 
 /* ---------- nota de la previa (al Administrador de la Aduana) ---------- */
 // exportadores de la comunicación que se está generando (todos o el elegido)
-const abrevsNota = b => (exSel === "all" || !multiExp(b) ? expKeys(b) : [exSel]).map(k => expAbrev(b, k));
+const abrevsNota = b => (exSel === "all" || !multiExp(b) ? expKeys(b) : [exSel]).map(k => expEtiq(b, k));
 const claveCarga = () => exSel === "all" ? "carga" : "carga_" + exSel;
 function cargaAuto(b){
   const m = {}; b.permisos.filter(p => p.com === 0 && (exSel === "all" || !multiExp(b) || expKey(p) === exSel)).forEach(p => { const k = (p.merc || "").trim() || "—"; m[k] = (m[k] || 0) + aTn(parseNum(p.tons)); });
