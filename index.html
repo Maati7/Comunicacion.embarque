@@ -374,9 +374,10 @@ function renderPermisos(){
   const mc = maxCom(b);
   box.innerHTML = b.permisos.map((p, i) => {
     let opts = ""; for (let n = 0; n <= mc + 1; n++) opts += `<option value="${n}" ${p.com === n ? "selected" : ""}>${comNombre(n)}${n === mc + 1 ? " (nueva)" : ""}</option>`;
-    return `<div class="card permiso" data-id="${p.id}" data-com="${p.com}">
+    return `<div class="card permiso" data-id="${p.id}" data-com="${p.com}"${p.resaltar ? ' style="background:color-mix(in srgb, #FFE45C 22%, var(--panel))"' : ""}>
       <div class="head"><span class="tag">Permiso ${i+1}${p.sita ? ` · <span style="color:var(--amber)">Rectificado por ${esc(p.sita)}</span>` : ""}</span>
         <span style="display:flex;gap:4px">
+          <select class="small" data-p="pos" aria-label="Posición del permiso ${i+1}" style="min-height:36px;width:auto;padding:4px 6px">${b.permisos.map((_, k) => `<option value="${k}" ${k === i ? "selected" : ""}>${k + 1}º</option>`).join("")}</select>
           <button class="small" data-mov="-1" ${i === 0 ? "disabled" : ""} aria-label="Subir permiso ${i+1}">▲</button>
           <button class="small" data-mov="1" ${i === b.permisos.length - 1 ? "disabled" : ""} aria-label="Bajar permiso ${i+1}">▼</button>
           <button class="small ghost danger" data-del="${p.id}" aria-label="Eliminar permiso ${i+1}">Eliminar</button></span></div>
@@ -388,6 +389,7 @@ function renderPermisos(){
         <label class="f"><span>Inicio de carga estimado</span><input type="datetime-local" data-p="inicio" value="${esc(p.inicio)}" class="${p.inicio ? "" : "falta"}"></label>
         <label class="f"><span>Va en</span><select data-p="com">${opts}</select></label>
         ${S.buques.length > 1 ? `<label class="f full"><span>Buque</span><select data-p="buque">${S.buques.map(x => `<option value="${x.id}" ${x.id === b.id ? "selected" : ""}>${esc(x.buque || "(sin nombre)")}</option>`).join("")}</select></label>` : ""}
+        <label class="check full"><input type="checkbox" data-p="resaltar" ${p.resaltar ? "checked" : ""}> Resaltar este permiso en el PDF y el Excel</label>
         <div class="full defbox">
           <div class="grid">
             <label class="f"><span>Cumplido (definitiva)</span><select data-p="estado">
@@ -420,6 +422,10 @@ $("#listaPermisos").addEventListener("change", e => {
     moverPermiso(p, orig, dest); save(); renderTodo(); toast(`Permiso pasado a ${dest.buque}`); return;
   }
   if (el.dataset.p === "sinHora") { p.sinHora = el.checked; save(); return; }
+  if (el.dataset.p === "resaltar") { p.resaltar = el.checked; save(); renderPermisos(); return; }
+  if (el.dataset.p === "pos") { const b = B(); const i = b.permisos.indexOf(p), j = parseInt(el.value, 10);
+    b.permisos.splice(i, 1); b.permisos.splice(j, 0, p); save(); renderPermisos();
+    document.querySelector(`#listaPermisos [data-id="${p.id}"]`)?.scrollIntoView({ block: "center" }); return; }
   if (el.dataset.p === "estado") { p.estado = el.value; delete p.conforme; p.sinHora = el.value === "NO EMBARCO"; save(); renderPermisos(); return; }
   if (el.dataset.p === "com") { p.com = parseInt(el.value, 10); compactarComs(B()); save(); renderPermisos(); }
   else { p[el.dataset.p] = el.value; if (el.dataset.p === "inicio") el.classList.toggle("falta", !el.value); save(); }
@@ -466,7 +472,7 @@ function armar(b, sel, ex = "all"){
   const gral = multiExp(b) && ex === "all";
   const n = def ? null : parseInt(sel, 10);
   // la complementaria incluye los permisos de la previa y de las complementarias anteriores
-  let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).filter(p => ex === "all" || expKey(p) === ex).map((p, i) => ({ p, i })).sort((a, c) => (a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
+  let lista = (def ? b.permisos : b.permisos.filter(p => p.com <= n)).filter(p => ex === "all" || expKey(p) === ex).map((p, i) => ({ p, i })).sort((a, c) => (def ? 0 : a.p.com - c.p.com) || (a.i - c.i)).map(x => x.p);
   // en la definitiva salen en el orden que tienen en la pestaña Permisos
   const titulo = (def ? ["DEFINITIVA"] : n === 0 ? ["PREVIA"] : ["PREVIA", "COMPLEMENTARIA"]).concat(gral ? ["GRAL"] : []);
   const col4 = def ? "APLICACIÓN" : gral ? "EXPORTADOR" : "DESTINO";
@@ -482,10 +488,11 @@ function armar(b, sel, ex = "all"){
       return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
     return [p.doc, p.merc, fmtKg(t), gral ? expEtiq(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
   });
+  const resalt = lista.map(p => !!p.resaltar);
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
   const total = fmtKg(totT);
   const nombre = (def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`) + (gral ? " GRAL" : ex !== "all" ? " " + expAbrev(b, ex) : "");
-  return { b, def, n, ex, gral, titulo, col4, filas, total, nombre, vacia: !lista.length,
+  return { b, def, n, ex, gral, resalt, titulo, col4, filas, total, nombre, vacia: !lista.length,
     exportadores: exps.map(k => expNombre(b, k)), abrevs: exps.map(k => expAbrev(b, k)) };
 }
 const HEAD = ["DOCUMENTOS ADUANEROS", "MERCADERIA", "TONS.", null, "FECHA DE INICIO DE CARGA", "FECHA DE FIN DE CARGA"];
@@ -511,7 +518,7 @@ function sheetHTML(c, fecha, paraExcel){
   <table class="grid-t">
     <thead><tr>${HEAD.map(h => `<td${bd}><b>${esc(h || c.col4)}</b></td>`).join("")}</tr></thead>
     <tbody>
-      ${c.filas.map(f => `<tr>${f.map((v, i) => `<td${bd}${i === 0 ? tx : ""}>${esc(v)}</td>`).join("")}</tr>`).join("")}
+      ${c.filas.map((f, r) => `<tr${c.resalt[r] ? ' style="background:#FFE45C;font-weight:bold"' : ""}>${f.map((v, i) => `<td${c.resalt[r] ? (paraExcel ? ' style="border:1px solid #000;text-align:center;vertical-align:middle;background:#FFE45C;font-weight:bold' + (i === 0 ? ";mso-number-format:'\\@'" : "") + '"' : "") : bd + (i === 0 ? tx : "")}>${esc(v)}</td>`).join("")}</tr>`).join("")}
       <tr><td${bd} colspan="2"><b>Total permisos embarque</b></td><td${bd}><b>${esc(c.total)}</b></td><td${bd}></td><td${bd}></td><td${bd}></td></tr>
     </tbody>
   </table>
@@ -613,7 +620,7 @@ function construirPDF(c, fecha, d0){
       h = Math.max(h, d.splitTextToSize(String(v ?? ""), w - 2).length * (opts.size || 9) * 0.42 + 3); });
     vals.forEach((v, i) => {
       const w = opts.spans && opts.spans[i] !== undefined ? opts.spans[i] : cols[i]; if (w === 0) return;
-      d.rect(x, y, w, h);
+      if (opts.fill) { d.setFillColor(255, 228, 92); d.rect(x, y, w, h, "FD"); } else d.rect(x, y, w, h);
       d.setFont("helvetica", opts.bold ? "bold" : "normal"); d.setFontSize(opts.size || 9);
       const lines = d.splitTextToSize(String(v ?? ""), w - 2);
       const lh = (opts.size || 9) * 0.42;
@@ -624,7 +631,7 @@ function construirPDF(c, fecha, d0){
     y += h;
   };
   fila(head, 13, { bold: true, size: 8 });
-  c.filas.forEach(f => fila(f, 8, { size: 9 }));
+  c.filas.forEach((f, r) => fila(f, 8, { size: 9, bold: c.resalt[r], fill: c.resalt[r] }));
   fila(["Total permisos embarque", "", c.total, "", "", ""], 8, { bold: true, size: 9, spans: [cols[0] + cols[1], 0, 0, 0, 0, 0].map((v, i) => i === 0 ? cols[0] + cols[1] : i === 1 ? 0 : cols[i]) });
 
   // pie
