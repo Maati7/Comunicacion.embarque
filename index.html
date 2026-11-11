@@ -394,6 +394,10 @@ function renderPermisos(){
           <div class="grid">
             <label class="f"><span>Cumplido (definitiva)</span><select data-p="estado">
               ${["CONFORME", "CON DIFERENCIA", "NO EMBARCO"].map(o => `<option ${estadoDe(p) === o ? "selected" : ""}>${o}</option>`).join("")}</select></label>
+            <label class="f"><span>Aplicación en la planilla (a mano)</span><input data-p="aplicTxt" value="${esc(p.aplicTxt || "")}" placeholder="${esc(estadoDe(p))}" autocapitalize="characters"></label>
+            <label class="f"><span>Inicio real de este permiso</span><input type="datetime-local" data-p="iniDef" value="${esc(p.iniDef || "")}"></label>
+            <label class="f"><span>Fin real de este permiso</span><input type="datetime-local" data-p="finDef" value="${esc(p.finDef || "")}"></label>
+            <p class="hint full" style="margin:0">Si dejás estos tres vacíos, se usa lo del cumplido y las fechas de la pestaña Buque.</p>
             ${estadoDe(p) === "NO EMBARCO" ? `<label class="check" style="align-self:end;min-height:44px"><input type="checkbox" data-p="sinHora" ${p.sinHora ? "checked" : ""}> Sin horarios en la definitiva</label>` : ""}
             ${estadoDe(p) === "CON DIFERENCIA" ? `<label class="f"><span>Cargado (kilos o toneladas)</span><input data-p="tonsEmb" value="${esc(p.tonsEmb || "")}" inputmode="decimal" placeholder="Permiso: ${esc(p.tons)}" class="${String(p.tonsEmb || "").trim() ? "" : "falta"}"></label>` : ""}
           </div>
@@ -405,7 +409,7 @@ $("#listaPermisos").addEventListener("input", e => {
   const el = e.target; const card = el.closest("[data-id]"); if (!card || !el.dataset.p || el.tagName === "SELECT" || el.type === "checkbox") return;
   const p = B().permisos.find(x => x.id === card.dataset.id); if (!p) return;
   let v = el.value;
-  if (el.dataset.p === "doc" || el.dataset.p === "merc") { v = v.toUpperCase(); if (el.value !== v) { const c = el.selectionStart; el.value = v; try { el.setSelectionRange(c, c); } catch(_){} } }
+  if (el.dataset.p === "doc" || el.dataset.p === "merc" || el.dataset.p === "aplicTxt") { v = v.toUpperCase(); if (el.value !== v) { const c = el.selectionStart; el.value = v; try { el.setSelectionRange(c, c); } catch(_){} } }
   p[el.dataset.p] = v; if (el.dataset.p === "tonsEmb") el.classList.toggle("falta", !v.trim()); save();
 });
 $("#listaPermisos").addEventListener("change", e => {
@@ -481,9 +485,9 @@ function armar(b, sel, ex = "all"){
   let aplicAnt = null, iniAnt = null, finAnt = null;
   const filas = lista.map((p, i) => {
     const t = tnDef(p, def);
-    if (def) { const a = aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
-      if (estadoDe(p) === "NO EMBARCO" && p.sinHora) { iniAnt = finAnt = null; return [p.doc, p.merc, fmtKg(t), celda, "", ""]; }
-      const fe = fechasDe(b, p), ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
+    if (def) { const a = (p.aplicTxt || "").trim() || aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
+      if (estadoDe(p) === "NO EMBARCO" && p.sinHora && !p.iniDef && !p.finDef) { iniAnt = finAnt = null; return [p.doc, p.merc, fmtKg(t), celda, "", ""]; }
+      const fg = fechasDe(b, p), fe = { inicio: p.iniDef || fg.inicio, fin: p.finDef || fg.fin }, ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
       const cIni = i > 0 && ini === iniAnt ? '"' : ini, cFin = i > 0 && fin === finAnt ? '"' : fin; iniAnt = ini; finAnt = fin;
       return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
     return [p.doc, p.merc, fmtKg(t), gral ? expEtiq(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
@@ -493,7 +497,7 @@ function armar(b, sel, ex = "all"){
   const total = fmtKg(totT);
   const nombre = (def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`) + (gral ? " GRAL" : ex !== "all" ? " " + expAbrev(b, ex) : "");
   return { b, def, n, ex, gral, resalt, titulo, col4, filas, total, nombre, vacia: !lista.length,
-    exportadores: exps.map(k => expNombre(b, k)), abrevs: exps.map(k => expAbrev(b, k)) };
+    exportadores: exps.map(k => expNombre(b, k)), expResalt: exps.map(k => lista.some(p => p.resaltar && expKey(p) === k)), abrevs: exps.map(k => expAbrev(b, k)) };
 }
 const HEAD = ["DOCUMENTOS ADUANEROS", "MERCADERIA", "TONS.", null, "FECHA DE INICIO DE CARGA", "FECHA DE FIN DE CARGA"];
 
@@ -510,7 +514,7 @@ function sheetHTML(c, fecha, paraExcel){
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="2">${B_("A.T.A.:")} ${esc(b.ata)}</td><td colspan="2">${B_("REGISTRO:")} ${esc(b.registro) || "……………………………"}</td><td colspan="2">${B_("PLANILLA Nº:")} ${esc(b.planilla)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
-    <tr><td colspan="3" style="vertical-align:top">${B_("EXPORTADORES:")} ${c.exportadores.map(esc).join("<br>")}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
+    <tr><td colspan="3" style="vertical-align:top">${B_("EXPORTADORES:")} ${c.exportadores.map((nm, i) => c.expResalt[i] ? `<b style="background:#FFE45C">${esc(nm)}</b>` : esc(nm)).join("<br>")}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="3">${B_("BUQUE:")} ${esc(b.buque)}</td><td>${B_("Unidad:")} ${esc(b.unidad)}</td><td colspan="2">${B_("Destino:")} ${esc(b.destino)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
@@ -571,7 +575,7 @@ function nombreArchivo(c, ext){ return `Com Emb. ${c.nombre} - ${c.b.buque || "B
 function validar(c){
   if (c.vacia) { toast("Esta comunicación no tiene permisos"); return false; }
   if (c.def && c.b.permisos.some(p => estadoDe(p) === "CON DIFERENCIA" && !String(p.tonsEmb || "").trim())) { if (!confirm("Hay permisos con diferencia sin las toneladas cargadas. ¿Generar igual?")) return false; }
-  if (c.def && c.b.permisos.some(p => { const f = fechasDe(c.b, p); return !f.inicio || !f.fin; })) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
+  if (c.def && c.b.permisos.some(p => { if (estadoDe(p) === "NO EMBARCO" && p.sinHora) return false; const f = fechasDe(c.b, p); return !(p.iniDef || f.inicio) || !(p.finDef || f.fin); })) { if (!confirm("Faltan las fechas reales de inicio o fin de carga (pestaña Buque). ¿Generar igual?")) return false; }
   return true;
 }
 
@@ -601,8 +605,11 @@ function construirPDF(c, fecha, d0){
   txt("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII", R, y, { bold: true, size: 9.5, align: "right" });
   d.setFont("helvetica", "bold"); d.setFontSize(10); const wEx = d.getTextWidth("EXPORTADORES: ");
   d.setFont("helvetica", "normal");
-  const lnEx = c.exportadores.flatMap(nm => d.splitTextToSize(String(nm || ""), 105 - wEx));
-  lnEx.forEach((ln, i) => txt(ln, L + wEx, y + 5 * i, { size: 10 }));
+  const lnEx = c.exportadores.flatMap((nm, k) => d.splitTextToSize(String(nm || ""), 105 - wEx).map(ln => ({ ln, hi: c.expResalt[k] })));
+  lnEx.forEach(({ ln, hi }, i) => {
+    if (hi) { d.setFont("helvetica", "bold"); d.setFontSize(10); d.setFillColor(255, 228, 92); d.rect(L + wEx - 1, y + 5 * i - 3.6, d.getTextWidth(ln) + 2, 5, "F"); }
+    txt(ln, L + wEx, y + 5 * i, { size: 10, bold: hi });
+  });
   y += 10 + 5 * Math.max(0, lnEx.length - 1);
   par("BUQUE:", b.buque, L, y, 95);
   par("Unidad:", b.unidad, 112, y, 30);
