@@ -485,20 +485,26 @@ function armar(b, sel, ex = "all"){
   let aplicAnt = null, iniAnt = null, finAnt = null;
   const filas = lista.map((p, i) => {
     const t = tnDef(p, def);
-    if (def) { const a = (p.aplicTxt || "").trim() || aplicDe(p); const celda = a === aplicAnt ? '"' : a; aplicAnt = a;
-      if (estadoDe(p) === "NO EMBARCO" && p.sinHora && !p.iniDef && !p.finDef) { iniAnt = finAnt = null; return [p.doc, p.merc, fmtKg(t), celda, "", ""]; }
-      const fg = fechasDe(b, p), fe = { inicio: p.iniDef || fg.inicio, fin: p.finDef || fg.fin }, ini = fmtDT(fe.inicio), fin = fmtDT(fe.fin);
-      const cIni = i > 0 && ini === iniAnt ? '"' : ini, cFin = i > 0 && fin === finAnt ? '"' : fin; iniAnt = ini; finAnt = fin;
-      return [p.doc, p.merc, fmtKg(t), celda, cIni, cFin]; }
+    if (def) { const celda = (p.aplicTxt || "").trim() || aplicDe(p);
+      if (estadoDe(p) === "NO EMBARCO" && p.sinHora && !p.iniDef && !p.finDef) return [p.doc, p.merc, fmtKg(t), celda, "", ""];
+      const fg = fechasDe(b, p);
+      return [p.doc, p.merc, fmtKg(t), celda, fmtDT(p.iniDef || fg.inicio), fmtDT(p.finDef || fg.fin)]; }
     return [p.doc, p.merc, fmtKg(t), gral ? expEtiq(b, expKey(p)) : b.destino, fmtDT(p.inicio), ""];
   });
   const resalt = lista.map(p => !!p.resaltar);
+  const porColor = def && exps.length > 1;
+  const colExp = k => porColor ? COLORES_EXP[exps.indexOf(k) % COLORES_EXP.length] : null;
+  // con varios exportadores cada fila lleva el color de su exportador (y negrita si está resaltada)
+  const colorFila = lista.map(p => colExp(expKey(p)) || (p.resaltar ? AMARILLO : null));
   const totT = lista.reduce((s, p) => s + tnDef(p, def), 0);
   const total = fmtKg(totT);
   const nombre = (def ? "DEFINITIVA" : n === 0 ? "PREVIA" : `PREVIA COMPLEMENTARIA ${n}`) + (gral ? " GRAL" : ex !== "all" ? " " + expAbrev(b, ex) : "");
-  return { b, def, n, ex, gral, resalt, titulo, col4, filas, total, nombre, vacia: !lista.length,
+  return { b, def, n, ex, gral, resalt, colorFila, expColor: exps.map(k => colExp(k) || (lista.some(p => p.resaltar && expKey(p) === k) ? AMARILLO : null)), titulo, col4, filas, total, nombre, vacia: !lista.length,
     exportadores: exps.map(k => expNombre(b, k)), expResalt: exps.map(k => lista.some(p => p.resaltar && expKey(p) === k)), abrevs: exps.map(k => expAbrev(b, k)) };
 }
+// colores para distinguir exportadores en la definitiva (el amarillo queda para "resaltar")
+const AMARILLO = { hex: "#FFE45C", rgb: [255, 228, 92] };
+const COLORES_EXP = [{ hex: "#BFDDF5", rgb: [191, 221, 245] }, { hex: "#C8EBC0", rgb: [200, 235, 192] }, { hex: "#F8CDB0", rgb: [248, 205, 176] }, { hex: "#DCCBF2", rgb: [220, 203, 242] }, { hex: "#F5C4D8", rgb: [245, 196, 216] }];
 const HEAD = ["DOCUMENTOS ADUANEROS", "MERCADERIA", "TONS.", null, "FECHA DE INICIO DE CARGA", "FECHA DE FIN DE CARGA"];
 
 /* ---------- vista previa / excel (mismo HTML) ---------- */
@@ -514,7 +520,7 @@ function sheetHTML(c, fecha, paraExcel){
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="2">${B_("A.T.A.:")} ${esc(b.ata)}</td><td colspan="2">${B_("REGISTRO:")} ${esc(b.registro) || "……………………………"}</td><td colspan="2">${B_("PLANILLA Nº:")} ${esc(b.planilla)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
-    <tr><td colspan="3" style="vertical-align:top">${B_("EXPORTADORES:")} ${c.exportadores.map((nm, i) => c.expResalt[i] ? `<b style="background:#FFE45C">${esc(nm)}</b>` : esc(nm)).join("<br>")}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
+    <tr><td colspan="3" style="vertical-align:top">${B_("EXPORTADORES:")} ${c.exportadores.map((nm, i) => c.expColor[i] ? `<b style="background:${c.expColor[i].hex}">${esc(nm)}</b>` : esc(nm)).join("<br>")}</td><td colspan="3">${B_("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII")}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
     <tr><td colspan="3">${B_("BUQUE:")} ${esc(b.buque)}</td><td>${B_("Unidad:")} ${esc(b.unidad)}</td><td colspan="2">${B_("Destino:")} ${esc(b.destino)}</td></tr>
     <tr><td colspan="6">&nbsp;</td></tr>
@@ -522,7 +528,8 @@ function sheetHTML(c, fecha, paraExcel){
   <table class="grid-t">
     <thead><tr>${HEAD.map(h => `<td${bd}><b>${esc(h || c.col4)}</b></td>`).join("")}</tr></thead>
     <tbody>
-      ${c.filas.map((f, r) => `<tr${c.resalt[r] ? ' style="background:#FFE45C;font-weight:bold"' : ""}>${f.map((v, i) => `<td${c.resalt[r] ? (paraExcel ? ' style="border:1px solid #000;text-align:center;vertical-align:middle;background:#FFE45C;font-weight:bold' + (i === 0 ? ";mso-number-format:'\\@'" : "") + '"' : "") : bd + (i === 0 ? tx : "")}>${esc(v)}</td>`).join("")}</tr>`).join("")}
+      ${c.filas.map((f, r) => { const col = c.colorFila[r]; const fw = c.resalt[r] ? ";font-weight:bold" : "";
+        return `<tr${col ? ` style="background:${col.hex}${fw}"` : ""}>${f.map((v, i) => `<td${col ? (paraExcel ? ` style="border:1px solid #000;text-align:center;vertical-align:middle;background:${col.hex}${fw}` + (i === 0 ? ";mso-number-format:'\\@'" : "") + '"' : "") : bd + (i === 0 ? tx : "")}>${esc(v)}</td>`).join("")}</tr>`; }).join("")}
       <tr><td${bd} colspan="2"><b>Total permisos embarque</b></td><td${bd}><b>${esc(c.total)}</b></td><td${bd}></td><td${bd}></td><td${bd}></td></tr>
     </tbody>
   </table>
@@ -605,10 +612,10 @@ function construirPDF(c, fecha, d0){
   txt("SERVICIOS PORTUARIOS S.A. UNIDAD VI-VII", R, y, { bold: true, size: 9.5, align: "right" });
   d.setFont("helvetica", "bold"); d.setFontSize(10); const wEx = d.getTextWidth("EXPORTADORES: ");
   d.setFont("helvetica", "normal");
-  const lnEx = c.exportadores.flatMap((nm, k) => d.splitTextToSize(String(nm || ""), 105 - wEx).map(ln => ({ ln, hi: c.expResalt[k] })));
+  const lnEx = c.exportadores.flatMap((nm, k) => d.splitTextToSize(String(nm || ""), 105 - wEx).map(ln => ({ ln, hi: c.expColor[k] })));
   lnEx.forEach(({ ln, hi }, i) => {
-    if (hi) { d.setFont("helvetica", "bold"); d.setFontSize(10); d.setFillColor(255, 228, 92); d.rect(L + wEx - 1, y + 5 * i - 3.6, d.getTextWidth(ln) + 2, 5, "F"); }
-    txt(ln, L + wEx, y + 5 * i, { size: 10, bold: hi });
+    if (hi) { d.setFont("helvetica", "bold"); d.setFontSize(10); d.setFillColor(...hi.rgb); d.rect(L + wEx - 1, y + 5 * i - 3.6, d.getTextWidth(ln) + 2, 5, "F"); }
+    txt(ln, L + wEx, y + 5 * i, { size: 10, bold: !!hi });
   });
   y += 10 + 5 * Math.max(0, lnEx.length - 1);
   par("BUQUE:", b.buque, L, y, 95);
@@ -627,7 +634,7 @@ function construirPDF(c, fecha, d0){
       h = Math.max(h, d.splitTextToSize(String(v ?? ""), w - 2).length * (opts.size || 9) * 0.42 + 3); });
     vals.forEach((v, i) => {
       const w = opts.spans && opts.spans[i] !== undefined ? opts.spans[i] : cols[i]; if (w === 0) return;
-      if (opts.fill) { d.setFillColor(255, 228, 92); d.rect(x, y, w, h, "FD"); } else d.rect(x, y, w, h);
+      if (opts.fill) { d.setFillColor(...opts.fill); d.rect(x, y, w, h, "FD"); } else d.rect(x, y, w, h);
       d.setFont("helvetica", opts.bold ? "bold" : "normal"); d.setFontSize(opts.size || 9);
       const lines = d.splitTextToSize(String(v ?? ""), w - 2);
       const lh = (opts.size || 9) * 0.42;
@@ -638,7 +645,7 @@ function construirPDF(c, fecha, d0){
     y += h;
   };
   fila(head, 13, { bold: true, size: 8 });
-  c.filas.forEach((f, r) => fila(f, 8, { size: 9, bold: c.resalt[r], fill: c.resalt[r] }));
+  c.filas.forEach((f, r) => fila(f, 8, { size: 9, bold: c.resalt[r], fill: c.colorFila[r] && c.colorFila[r].rgb }));
   fila(["Total permisos embarque", "", c.total, "", "", ""], 8, { bold: true, size: 9, spans: [cols[0] + cols[1], 0, 0, 0, 0, 0].map((v, i) => i === 0 ? cols[0] + cols[1] : i === 1 ? 0 : cols[i]) });
 
   // pie
@@ -1150,11 +1157,14 @@ function completarBuque(b, d){
 // mueve un permiso a otro buque; si el buque de origen queda vacío y lo creó la importación, lo borra
 function moverPermiso(p, origen, destino){
   if (origen === destino) return;
-  const nom = p.exp || origen.expOrig || origen.exportador;
+  // se usa el nombre tal como está corregido en la app, no el que vino en el PDF
+  const nom = expNombre(origen, expKey(p)), orig = p.exp || origen.expOrig || origen.exportador;
   const abO = p.exp ? ((origen.expInfo || {})[p.exp] || {}).abrev : origen.exportadorAbrev;
-  const k = claveExp(destino, nom);
-  if (k) { p.exp = k; if (abO) { destino.expInfo = destino.expInfo || {}; destino.expInfo[k] = destino.expInfo[k] || { abrev: abO }; } }
-  else { delete p.exp; if (abO && !destino.exportadorAbrev) destino.exportadorAbrev = abO; }
+  const mismo = k => k === "_" ? (destino.exportador === nom || (destino.expOrig || destino.exportador) === orig) : (expNombre(destino, k) === nom || k === orig);
+  const k = !destino.exportador ? "_" : ["_", ...Object.keys(destino.expInfo || {}), ...destino.permisos.map(expKey)].find(mismo);
+  if (k === "_") { delete p.exp; if (!destino.exportador) { destino.exportador = nom; destino.expOrig = orig; } if (abO && !destino.exportadorAbrev) destino.exportadorAbrev = abO; }
+  else { const kk = k || orig; p.exp = kk; destino.expInfo = destino.expInfo || {};
+    destino.expInfo[kk] = Object.assign({ nombre: nom }, abO ? { abrev: abO } : {}, destino.expInfo[kk] || {}); }
   origen.permisos = origen.permisos.filter(x => x !== p); compactarComs(origen);
   p.com = destino.permisos.length ? Math.max(maxCom(destino), p.com > 0 ? 1 : 0) : 0;
   destino.permisos.push(p);
